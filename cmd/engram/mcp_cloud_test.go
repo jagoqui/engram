@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -527,5 +529,80 @@ func TestCmdMCPHTTPGracefulShutdownStopsLazilyStartedAutosync(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&stopCalls); got != 1 {
 		t.Fatalf("expected the lazily-started autosync manager to be stopped exactly once, got %d", got)
+	}
+}
+
+// TestCmdMCPHTTP_CloudModeHTTPSServerStarts (R3-missing-positive-startup-test):
+// the positive counterpart of the non-HTTPS startup failure — an https
+// ENGRAM_CLOUD_SERVER with no token starts cleanly in bearer-only mode.
+// It also asserts the boot log is the informational bearer-only line, not the
+// stdio REQ-211 "token is not configured" ERROR.
+func TestCmdMCPHTTP_CloudModeHTTPSServerStarts(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	oldNewMCPServerWithConfig := newMCPServerWithConfig
+	t.Cleanup(func() { newMCPServerWithConfig = oldNewMCPServerWithConfig })
+	newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+		return mcpserver.NewMCPServer("test", "0")
+	}
+	served := false
+	oldServeMCPHTTP := serveMCPHTTP
+	t.Cleanup(func() { serveMCPHTTP = oldServeMCPHTTP })
+	serveMCPHTTP = func(_ context.Context, _ *mcpserver.MCPServer, c mcp.HTTPTransportConfig) error {
+		served = c.CloudAuth != nil
+		return nil
+	}
+
+	var logBuf bytes.Buffer
+	oldLog := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
+
+	t.Setenv("ENGRAM_CLOUD_AUTOSYNC", "1")
+	t.Setenv(mcp.EnvHTTPToken, "")
+	t.Setenv("ENGRAM_CLOUD_SERVER", "https://cloud.example.test")
+	t.Setenv("ENGRAM_CLOUD_TOKEN", "")
+
+	withArgs(t, "engram", "mcp", "--transport=http")
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
+	if recovered != nil || stderr != "" {
+		t.Fatalf("expected clean startup, got panic=%v stderr=%q", recovered, stderr)
+	}
+	if !served {
+		t.Fatal("expected the HTTP transport to be served with CloudAuth wired")
+	}
+	out := logBuf.String()
+	if strings.Contains(out, "ERROR: cloud token is not configured") {
+		t.Fatalf("bearer-only boot must not log the token ERROR, got %q", out)
+	}
+	if !strings.Contains(out, "waiting for the first authenticated request") {
+		t.Fatalf("expected the bearer-only info line, got %q", out)
+	}
+}
+
+// TestTryStartAutosync_MissingTokenStaysErrorOutsideHTTPBearerOnly keeps
+// REQ-211 for stdio / `engram serve`: the ERROR line is unchanged there.
+func TestTryStartAutosync_MissingTokenStaysErrorOutsideHTTPBearerOnly(t *testing.T) {
+	cfg := testConfig(t)
+	s, err := store.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var logBuf bytes.Buffer
+	oldLog := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
+
+	t.Setenv("ENGRAM_CLOUD_AUTOSYNC", "1")
+	t.Setenv("ENGRAM_CLOUD_SERVER", "https://cloud.example.test")
+	t.Setenv("ENGRAM_CLOUD_TOKEN", "")
+
+	tryStartAutosync(context.Background(), s, cfg)
+	if !strings.Contains(logBuf.String(), "ERROR: cloud token is not configured") {
+		t.Fatalf("expected the REQ-211 ERROR outside HTTP bearer-only mode, got %q", logBuf.String())
 	}
 }

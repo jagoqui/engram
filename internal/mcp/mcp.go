@@ -1233,7 +1233,7 @@ func handleSearch(s *store.Store, cfg MCPConfig, activity *SessionActivity) serv
 			// Resolve project: validate override or auto-detect (REQ-310, REQ-311)
 			res, err := resolveReadProjectWithProcessOverride(ctx, s, projectOverride, cfg.DefaultProject)
 			if err != nil {
-				return readProjectErrorResult(activity, res, err), nil
+				return readProjectErrorResult(ctx, activity, res, err), nil
 			}
 			detRes = res
 			project = detRes.Project
@@ -1484,7 +1484,7 @@ func handleSave(s *store.Store, cfg MCPConfig, activity *SessionActivity) server
 		// existing session association, process override, repo config/directory detection, then cwd fallback.
 		detRes, err := resolveSaveWriteProjectWithProcessOverride(ctx, s, projectChoice, explicitProjectProvided, projectChoiceReason, sessionID, validateRecoveryToken, cfg.DefaultProject)
 		if err != nil {
-			return writeProjectErrorResult(activity, recoverySessionID, detRes, err), nil
+			return writeProjectErrorResult(ctx, activity, recoverySessionID, detRes, err), nil
 		}
 		project := detRes.Project
 
@@ -1691,7 +1691,7 @@ func handleUpdate(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 
 		detRes, err := resolveWriteProjectWithProcessOverride(ctx, s, cfg.DefaultProject, true)
 		if err != nil {
-			return writeProjectErrorResult(nil, "", detRes, err), nil
+			return writeProjectErrorResult(ctx, nil, "", detRes, err), nil
 		}
 		obs, err := s.GetObservation(id)
 		if err != nil {
@@ -1813,7 +1813,7 @@ func handleReview(s *store.Store, cfg MCPConfig, activities ...*SessionActivity)
 			}
 			detRes, detErr := resolveReadProjectWithProcessOverride(ctx, s, "", cfg.DefaultProject)
 			if detErr != nil {
-				return readProjectErrorResult(activity, detRes, detErr), nil
+				return readProjectErrorResult(ctx, activity, detRes, detErr), nil
 			}
 			markReviewed := s.MarkReviewed
 			if detRes.Project != "" {
@@ -1890,7 +1890,7 @@ func handleSavePrompt(s *store.Store, cfg MCPConfig, activity *SessionActivity) 
 			detRes, err = resolveWriteProjectWithChoiceAndProcessOverride(ctx, s, projectChoice, projectChoiceReason, validateRecoveryToken, cfg.DefaultProject)
 		}
 		if err != nil {
-			return writeProjectErrorResult(activity, recoverySessionID, detRes, err), nil
+			return writeProjectErrorResult(ctx, activity, recoverySessionID, detRes, err), nil
 		}
 		project, _ := store.NormalizeProject(detRes.Project)
 
@@ -2028,7 +2028,7 @@ func handleContext(s *store.Store, cfg MCPConfig, activity *SessionActivity) ser
 		// Resolve project: validate override or auto-detect (REQ-310, REQ-311)
 		detRes, err := resolveReadProjectWithProcessOverride(ctx, s, projectOverride, cfg.DefaultProject)
 		if err != nil {
-			return readProjectErrorResult(activity, detRes, err), nil
+			return readProjectErrorResult(ctx, activity, detRes, err), nil
 		}
 		project := detRes.Project
 		project, _ = store.NormalizeProject(project)
@@ -2104,7 +2104,7 @@ func handleStats(s *store.Store, cfg MCPConfig, activities ...*SessionActivity) 
 			var err error
 			detRes, err = resolveReadProjectWithProcessOverride(ctx, s, projectOverride, cfg.DefaultProject)
 			if err != nil {
-				return readProjectErrorResult(activity, detRes, err), nil
+				return readProjectErrorResult(ctx, activity, detRes, err), nil
 			}
 		}
 
@@ -2142,7 +2142,7 @@ func handleDoctor(s *store.Store, cfg MCPConfig, activities ...*SessionActivity)
 		check, _ := req.GetArguments()["check"].(string)
 		detRes, err := resolveReadProjectWithProcessOverride(ctx, s, projectOverride, cfg.DefaultProject)
 		if err != nil {
-			return readProjectErrorResult(activity, detRes, err), nil
+			return readProjectErrorResult(ctx, activity, detRes, err), nil
 		}
 		project := detRes.Project
 		project, _ = store.NormalizeProject(project)
@@ -2186,7 +2186,7 @@ func handleTimeline(s *store.Store, cfg MCPConfig, activities ...*SessionActivit
 		// Resolve project: validate override or auto-detect (REQ-310, REQ-311, REQ-314)
 		detRes, err := resolveReadProjectWithProcessOverride(ctx, s, projectOverride, cfg.DefaultProject)
 		if err != nil {
-			return readProjectErrorResult(activity, detRes, err), nil
+			return readProjectErrorResult(ctx, activity, detRes, err), nil
 		}
 		focus, err := s.GetObservation(observationID)
 		if err != nil {
@@ -2283,7 +2283,7 @@ func handleGetObservation(s *store.Store, cfg MCPConfig, activities ...*SessionA
 		)
 
 		if detErr != nil {
-			return readProjectErrorResult(activity, detRes, detErr), nil
+			return readProjectErrorResult(ctx, activity, detRes, detErr), nil
 		}
 		return respondWithProject(detRes, result, nil), nil
 	}
@@ -2322,7 +2322,7 @@ func handleSessionSummary(s *store.Store, cfg MCPConfig, activity *SessionActivi
 		// existing session association, process override, repo config/directory detection, then cwd fallback.
 		detRes, err := resolveSaveWriteProjectWithProcessOverride(ctx, s, projectChoice, explicitProjectProvided, projectChoiceReason, sessionID, validateRecoveryToken, cfg.DefaultProject)
 		if err != nil {
-			return writeProjectErrorResult(activity, recoverySessionID, detRes, err), nil
+			return writeProjectErrorResult(ctx, activity, recoverySessionID, detRes, err), nil
 		}
 		project := detRes.Project
 
@@ -2377,7 +2377,7 @@ func handleSessionStart(s *store.Store, cfg MCPConfig, activity *SessionActivity
 
 		detRes, err := resolveSessionStartProject(ctx, s, resolvedDirectory, cfg.DefaultProject)
 		if err != nil {
-			return writeProjectErrorResult(nil, "", detRes, err), nil
+			return writeProjectErrorResult(ctx, nil, "", detRes, err), nil
 		}
 		project, _ := store.NormalizeProject(detRes.Project)
 
@@ -2425,7 +2425,7 @@ func handleSessionEnd(s *store.Store, cfg MCPConfig, activity *SessionActivity) 
 		detRes, err := resolveWriteProjectWithProcessOverride(ctx, s, cfg.DefaultProject, false)
 		if err != nil {
 			if errors.Is(err, projectpkg.ErrInvalidConfig) || errors.Is(err, projectpkg.ErrRepositoryBinding) {
-				return writeProjectErrorResult(nil, "", detRes, err), nil
+				return writeProjectErrorResult(ctx, nil, "", detRes, err), nil
 			}
 			// For session end, still complete the operation even if project
 			// resolution fails. Use basename fallback — but never the
@@ -2464,7 +2464,7 @@ func handleCapturePassive(s *store.Store, cfg MCPConfig, activity *SessionActivi
 
 		detRes, err := resolveSaveWriteProjectWithProcessOverride(ctx, s, "", false, "", sessionID, nil, cfg.DefaultProject)
 		if err != nil {
-			return writeProjectErrorResult(activity, sessionID, detRes, err), nil
+			return writeProjectErrorResult(ctx, activity, sessionID, detRes, err), nil
 		}
 		project, _ := store.NormalizeProject(detRes.Project)
 
@@ -3340,7 +3340,43 @@ func respondWithProject(res projectpkg.DetectionResult, text string, extra map[s
 
 // writeProjectErrorResult formats and returns a structured error result when project
 // resolution fails. It handles ambiguous project errors and invalid configs.
-func writeProjectErrorResult(activity *SessionActivity, sessionID string, res projectpkg.DetectionResult, err error) *mcp.CallToolResult {
+func writeProjectErrorResult(ctx context.Context, activity *SessionActivity, sessionID string, res projectpkg.DetectionResult, err error) *mcp.CallToolResult {
+	result := writeProjectErrorResultCore(activity, sessionID, res, err)
+	if isHTTPTransport(ctx) {
+		rewriteHintForHTTP(result)
+	}
+	return result
+}
+
+// rewriteHintForHTTP replaces the local-only recovery advice (cd into a repo,
+// repo .engram/config.json) in an error envelope's hint with the remote
+// equivalent: the X-Engram-Subproject request header. Remote clients have no
+// relationship to the server process's cwd or repository files.
+func rewriteHintForHTTP(result *mcp.CallToolResult) {
+	if result == nil || len(result.Content) == 0 {
+		return
+	}
+	text, ok := mcp.AsTextContent(result.Content[0])
+	if !ok {
+		return
+	}
+	var envelope map[string]any
+	if json.Unmarshal([]byte(text.Text), &envelope) != nil {
+		return
+	}
+	hint, _ := envelope["hint"].(string)
+	const header = "send the X-Engram-Subproject header naming the project"
+	updated := strings.NewReplacer(
+		"alternatively cd into the target repo or add repo .engram/config.json.", "alternatively "+header+".",
+		"or cd into the target repo, or add repo .engram/config.json.", "or "+header+".",
+	).Replace(hint)
+	if updated == hint {
+		return
+	}
+	addErrorMetadata(result, map[string]any{"hint": updated})
+}
+
+func writeProjectErrorResultCore(activity *SessionActivity, sessionID string, res projectpkg.DetectionResult, err error) *mcp.CallToolResult {
 	code := "ambiguous_project"
 	if errors.Is(err, store.ErrDatabaseGenerationChanged) {
 		return errorWithMeta("database_generation_changed", err.Error(), res.AvailableProjects)
@@ -3448,7 +3484,7 @@ func writeProjectErrorResult(activity *SessionActivity, sessionID string, res pr
 // readProjectErrorResult keeps read-tool ambiguity actionable just like writes.
 // In particular, callers need the detected candidates and short-lived recovery
 // context rather than an opaque tool error that discards the resolver result.
-func readProjectErrorResult(activity *SessionActivity, res projectpkg.DetectionResult, err error) *mcp.CallToolResult {
+func readProjectErrorResult(ctx context.Context, activity *SessionActivity, res projectpkg.DetectionResult, err error) *mcp.CallToolResult {
 	var result *mcp.CallToolResult
 	var unknownProjectErr *unknownProjectError
 	if errors.As(err, &unknownProjectErr) {
@@ -3457,7 +3493,7 @@ func readProjectErrorResult(activity *SessionActivity, res projectpkg.DetectionR
 			unknownProjectErr.AvailableProjects,
 		)
 	} else {
-		result = writeProjectErrorResult(activity, defaultSessionID(""), res, err)
+		result = writeProjectErrorResult(ctx, activity, defaultSessionID(""), res, err)
 	}
 	addErrorMetadata(result, map[string]any{
 		"project":        res.Project,

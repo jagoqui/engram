@@ -130,6 +130,15 @@ func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Hand
 	return withOriginHostGuard(guarded, cfg)
 }
 
+// warnIfUnauthenticatedListener logs a startup warning only when addr is
+// non-loopback and neither guard is configured: a LocalToken or a CloudAuth
+// (every request needs a cloud-validated bearer) both authenticate requests.
+func warnIfUnauthenticatedListener(addr string, cfg HTTPTransportConfig) {
+	if strings.TrimSpace(cfg.LocalToken) == "" && cfg.CloudAuth == nil && !isLoopbackAddr(addr) {
+		log.Printf("[mcp-http] WARNING: listening on %s with no %s configured — this endpoint accepts unauthenticated requests from any reachable client", addr, EnvHTTPToken)
+	}
+}
+
 // ServeHTTP starts the streamable HTTP MCP transport and blocks until ctx is
 // canceled or the underlying server errors. It logs a startup warning when
 // binding to a non-loopback address with no local guard (ENGRAM_MCP_HTTP_TOKEN)
@@ -137,9 +146,7 @@ func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Hand
 // any reachable client.
 func ServeHTTP(ctx context.Context, mcpSrv *server.MCPServer, cfg HTTPTransportConfig) error {
 	addr := ResolveHTTPListenAddr(cfg.ListenAddr)
-	if strings.TrimSpace(cfg.LocalToken) == "" && !isLoopbackAddr(addr) {
-		log.Printf("[mcp-http] WARNING: listening on %s with no %s configured — this endpoint accepts unauthenticated requests from any reachable client", addr, EnvHTTPToken)
-	}
+	warnIfUnauthenticatedListener(addr, cfg)
 
 	httpSrv := &http.Server{
 		Addr:    addr,

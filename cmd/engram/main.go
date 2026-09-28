@@ -1005,6 +1005,14 @@ func resolveServeSyncStatusProject() string {
 // validated token wins"). It is nil whenever autosync did not start; only
 // the HTTP transport's cloud wiring consumes it, stdio/serve ignore it.
 func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (autosyncStatusProvider, func(), func(string)) {
+	return tryStartAutosyncMode(ctx, s, cfg, false)
+}
+
+// tryStartAutosyncMode is tryStartAutosync with one extra switch:
+// bearerOnlyHTTP is true only for `engram mcp --transport=http`, where a
+// missing token is the expected bearer-only cloud mode (autosync starts
+// lazily on the first accepted bearer) rather than a misconfiguration.
+func tryStartAutosyncMode(ctx context.Context, s *store.Store, cfg store.Config, bearerOnlyHTTP bool) (autosyncStatusProvider, func(), func(string)) {
 	// REQ-210: opt-in requires exact "1".
 	if strings.TrimSpace(os.Getenv("ENGRAM_CLOUD_AUTOSYNC")) != "1" {
 		return nil, nil, nil
@@ -1023,6 +1031,10 @@ func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (au
 	// overridden by ENGRAM_CLOUD_TOKEN when set, so both sources are tried.
 	// On Windows (Task Scheduler), the env var is often absent — the file path
 	// is the expected source (issue #421).
+	if token == "" && bearerOnlyHTTP && serverURL != "" {
+		log.Printf("[autosync] waiting for the first authenticated request to start sync (bearer-only mode)")
+		return nil, nil, nil
+	}
 	if token == "" {
 		log.Printf("[autosync] ERROR: cloud token is not configured (set ENGRAM_CLOUD_TOKEN or store token in cloud.json via `engram cloud config`); autosync disabled")
 		return nil, nil, nil
@@ -1218,7 +1230,7 @@ func cmdMCP(cfg store.Config) {
 	// Autosync remains opt-in via ENGRAM_CLOUD_AUTOSYNC=1 and never makes MCP
 	// startup fatal when cloud config is missing or invalid.
 	ctx, cancel := context.WithCancel(context.Background())
-	_, mgrStop, setSyncToken := tryStartAutosync(ctx, s, cfg)
+	_, mgrStop, setSyncToken := tryStartAutosyncMode(ctx, s, cfg, transportFlag == "http")
 	// lazyCloud, when non-nil (T5 — HTTP cloud mode with no ENGRAM_CLOUD_TOKEN
 	// configured), wraps an autosync manager that has not started yet, or
 	// started on the first validated bearer; stopAutosync below must stop it

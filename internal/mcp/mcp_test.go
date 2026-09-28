@@ -7728,7 +7728,7 @@ func TestResolveReadProject_UnknownOverrideStatsGenerationChange(t *testing.T) {
 		t.Fatalf("resolveReadProject error = %v; want ErrDatabaseGenerationChanged", err)
 	}
 
-	result := readProjectErrorResult(NewSessionActivity(time.Minute), res, err)
+	result := readProjectErrorResult(context.Background(), NewSessionActivity(time.Minute), res, err)
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(callResultText(t, result)), &envelope); err != nil {
 		t.Fatalf("unmarshal project error result: %v", err)
@@ -7810,7 +7810,7 @@ func TestWriteProjectErrorResultClassifiesDetectionErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := writeProjectErrorResult(activity, "session-id", project.DetectionResult{
+			res := writeProjectErrorResult(context.Background(), activity, "session-id", project.DetectionResult{
 				Path:              "/workspace",
 				AvailableProjects: []string{"repo-a", "repo-b"},
 			}, tt.err)
