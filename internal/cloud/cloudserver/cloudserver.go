@@ -312,6 +312,7 @@ func (s *CloudServer) routes() {
 	s.mux.HandleFunc("POST /dashboard/admin/tokens/{tokenID}/revoke", s.requireDashboardSession(s.handleDashboardRevokeManagedToken))
 	s.mux.HandleFunc("POST /dashboard/admin/users/{principalID}/grants", s.requireDashboardSession(s.handleDashboardCreateManagedGrant))
 	s.mux.HandleFunc("POST /dashboard/admin/users/{principalID}/grants/{project}/revoke", s.requireDashboardSession(s.handleDashboardRevokeManagedGrant))
+	s.mux.HandleFunc("GET /auth/whoami", s.withAuth(s.handleWhoAmI))
 	s.mux.HandleFunc("GET /sync/pull", s.withAuth(s.handlePullManifest))
 	s.mux.HandleFunc("GET /sync/pull/{chunkID}", s.withAuth(s.handlePullChunk))
 	s.mux.HandleFunc("POST /sync/push", s.withAuth(s.handlePushChunk))
@@ -570,6 +571,12 @@ func dashboardCookieSecure(r *http.Request) bool {
 
 func (s *CloudServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"status": "ok", "service": "engram-cloud"})
+}
+
+// handleWhoAmI reports the authenticated principal's ID (plain text), used to bind an HTTP MCP bearer to one cloud account (cmd/engram's cloudBearerAuthenticator).
+func (s *CloudServer) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
+	principal, _ := PrincipalFromContext(r.Context()) // withAuth guarantees a principal
+	_, _ = w.Write([]byte(principal.ID))
 }
 
 func (s *CloudServer) isDashboardAdmin(r *http.Request) bool {

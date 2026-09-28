@@ -77,6 +77,18 @@ func TestSyncRoutesAuthenticateThroughPrincipalResolver(t *testing.T) {
 	}
 }
 
+func TestHandleWhoAmIReturnsAuthenticatedPrincipalID(t *testing.T) {
+	principal := cloudauth.Principal{ID: "acct-42", Kind: cloudauth.PrincipalKindLegacy, Role: cloudauth.RoleMember, Source: cloudauth.PrincipalSourceLegacyEnvSync, Enabled: true}
+	srv := New(&fakeStore{}, resolvingAuth{principals: map[string]cloudauth.Principal{"good-token": principal}}, 0)
+	req := httptest.NewRequest(http.MethodGet, "/auth/whoami", nil)
+	req.Header.Set("Authorization", "Bearer good-token")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "acct-42" {
+		t.Fatalf("got (%d, %q); want (200, acct-42)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPrincipalResolverStoresPrincipalInRequestContext(t *testing.T) {
 	managedPrincipal := cloudauth.Principal{ID: "p-managed", Kind: cloudauth.PrincipalKindHuman, Role: cloudauth.RoleMember, Source: cloudauth.PrincipalSourceManagedToken, Enabled: true}
 	authn := resolvingAuth{principals: map[string]cloudauth.Principal{"managed-token": managedPrincipal}}

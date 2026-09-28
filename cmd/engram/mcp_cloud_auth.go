@@ -23,13 +23,15 @@ import (
 type cloudBearerAuthenticator struct {
 	serverURL     string
 	fallbackToken string
-	validate      func(baseURL, token string) error // = remote.ValidateBearer; injectable for tests
+	validate      func(baseURL, token string) (string, error) // = remote.ValidateBearer; injectable
 	cache         *bearerValidationCache
 	setSyncToken  func(token string)
 	enrollProject func(project string) error
 
 	mu       sync.Mutex
 	enrolled map[string]struct{} // projects already ensured enrolled this process
+	// principals caches sha256(token)->principal ID; "" key = pinned owner.
+	principals map[string]string
 }
 
 // newCloudBearerAuthenticator builds a cloudBearerAuthenticator. setSyncToken
@@ -45,6 +47,7 @@ func newCloudBearerAuthenticator(serverURL, fallbackToken string, setSyncToken f
 		setSyncToken:  setSyncToken,
 		enrollProject: enrollProject,
 		enrolled:      make(map[string]struct{}),
+		principals:    make(map[string]string),
 	}
 }
 
@@ -57,27 +60,60 @@ func (a *cloudBearerAuthenticator) Authenticate(_ context.Context, token, projec
 		if a.fallbackToken == "" {
 			return false, nil
 		}
-		// The .env-configured token was already resolved at startup (it is
-		// what autosync itself uses absent a request bearer); trust it here
-		// without a redundant cloud round-trip on every request.
 		effective = a.fallbackToken
-	} else {
-		valid, err := a.cache.CheckOrValidate(effective, func() error { return a.validate(a.serverURL, effective) })
-		if err != nil {
-			log.Printf("[mcp-http] WARNING: cloud bearer validation could not reach %s: %v", a.serverURL, err)
-			return false, err
-		}
-		if !valid {
-			log.Printf("[mcp-http] WARNING: cloud rejected the request's bearer token")
-			return false, nil
-		}
 	}
-
+	principalID, err := a.resolvePrincipal(effective)
+	authorized := false
+	if err == nil && principalID != "" {
+		authorized, err = a.authorizeOwner(principalID)
+	}
+	if err != nil {
+		log.Printf("[mcp-http] WARNING: cloud bearer validation could not reach %s: %v", a.serverURL, err)
+		return false, err
+	}
+	if !authorized {
+		log.Printf("[mcp-http] WARNING: cloud rejected the bearer, or it belongs to a different account")
+		return false, nil
+	}
 	if a.setSyncToken != nil {
 		a.setSyncToken(effective)
 	}
 	a.ensureEnrolled(project)
 	return true, nil
+}
+
+// resolvePrincipal returns token's cloud principal ID via the cache, or "".
+func (a *cloudBearerAuthenticator) resolvePrincipal(token string) (string, error) {
+	var id string
+	valid, err := a.cache.CheckOrValidate(token, func() (verr error) { id, verr = a.validate(a.serverURL, token); return verr })
+	if err != nil || !valid {
+		return "", err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if id != "" {
+		a.principals[bearerCacheKey(token)] = id
+	}
+	return a.principals[bearerCacheKey(token)], nil
+}
+
+// authorizeOwner pins the owner (the .env fallback's principal, else principalID) on first use, reporting whether principalID matches it.
+func (a *cloudBearerAuthenticator) authorizeOwner(principalID string) (bool, error) {
+	owner := principalID
+	if a.fallbackToken != "" {
+		if id, err := a.resolvePrincipal(a.fallbackToken); err != nil {
+			return false, err
+		} else if id != "" {
+			owner = id
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pinned, ok := a.principals[""]
+	if !ok {
+		a.principals[""], pinned = owner, owner
+	}
+	return pinned == principalID, nil
 }
 
 // ensureEnrolled enrolls project for cloud sync at most once per process
