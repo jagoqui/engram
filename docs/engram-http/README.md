@@ -57,7 +57,7 @@ docker compose -f docker-compose.http.yml down -v   # stop and drop the volume
 | `ENGRAM_DATA_DIR` | Data directory inside the container. Already `/data`, matching the compose volume mount — only change together with the volume target. |
 | `ENGRAM_CLOUD_AUTOSYNC` | Set to `1` to enable cloud mode (see [Auth modes](#auth-modes)). |
 | `ENGRAM_CLOUD_SERVER` | Engram Cloud base URL, e.g. `http://host.docker.internal:18080`. |
-| `ENGRAM_CLOUD_TOKEN` | Fallback/owner cloud token used when a request carries no bearer of its own. |
+| `ENGRAM_CLOUD_TOKEN` | Optional. Fallback/owner cloud token used when a request carries no bearer of its own. Omit it entirely for bearer-only cloud mode — the first request's `Authorization: Bearer` pins the owner and starts sync. |
 
 `ENGRAM_MCP_HTTP_TOKEN` and `ENGRAM_CLOUD_AUTOSYNC=1` are mutually exclusive: the `Authorization` header is either a static local token or an Engram Cloud bearer, never both. `engram` refuses to start if both are set.
 
@@ -71,12 +71,17 @@ No cloud configuration. `ENGRAM_MCP_HTTP_TOKEN`, if set, guards `/mcp`; `/health
 
 ### Cloud mode
 
-Set `ENGRAM_CLOUD_AUTOSYNC=1`, `ENGRAM_CLOUD_SERVER`, and `ENGRAM_CLOUD_TOKEN`. Every request's bearer is validated against the cloud server's `GET /auth/whoami` (cached per token) and must resolve to the **same principal** that owns the configured `ENGRAM_CLOUD_TOKEN` — or, when no `.env` token is configured at all, the first validated bearer pins the instance owner for the container's lifetime. A bearer from a different account, an invalid bearer, or an unreachable/incompatible cloud server (missing `/auth/whoami`, pre-mutation-endpoint builds) all fail closed:
+Set `ENGRAM_CLOUD_AUTOSYNC=1` and `ENGRAM_CLOUD_SERVER`. `ENGRAM_CLOUD_TOKEN` is **optional**:
+
+- **With `ENGRAM_CLOUD_TOKEN` set**, every request's bearer must resolve to the **same principal** that owns it, and autosync starts immediately at boot.
+- **Without `ENGRAM_CLOUD_TOKEN`** (bearer-only mode), autosync does not start at boot; the first request's bearer that Engram Cloud accepts pins the instance owner for the container's lifetime, and sync starts at that point, using that bearer.
+
+Either way, every request's bearer is validated against the cloud server's `GET /auth/whoami` (cached per token). A bearer from a different account, an invalid bearer, or an unreachable/incompatible cloud server (missing `/auth/whoami`, pre-mutation-endpoint builds) all fail closed:
 
 - Invalid or wrong-account bearer → `401`
 - Cloud unreachable, or a cloud server too old to support `/auth/whoami` → `503`
 
-A validated request bearer also becomes the token autosync uses for outbound sync calls for the rest of the process lifetime ("last validated token wins"), and its project is enrolled for cloud sync automatically.
+A validated request bearer also becomes the token autosync uses for outbound sync calls for the rest of the process lifetime ("last validated token wins"), and its project is enrolled for cloud sync automatically. `ENGRAM_CLOUD_SERVER` is always required in cloud mode — a missing or invalid server URL is a fatal startup error either way.
 
 To point this container at a locally running `docker-compose.cloud.yml` stack:
 

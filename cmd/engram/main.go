@@ -1033,10 +1033,25 @@ func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (au
 		return nil, nil, nil
 	}
 
-	remoteMT, err := remote.NewMutationTransport(serverURL, token)
+	provider, stop, setToken, err := startAutosyncManager(ctx, s, serverURL, token)
 	if err != nil {
 		log.Printf("[autosync] ERROR: invalid server URL %q: %v; autosync disabled", serverURL, err)
 		return nil, nil, nil
+	}
+	return provider, stop, setToken
+}
+
+// startAutosyncManager builds and launches the autosync Manager for
+// serverURL/token and returns its (status provider, stop func, SetToken
+// func). It is the construction core shared by tryStartAutosync (boot-time
+// start, used when ENGRAM_CLOUD_TOKEN is configured) and lazyAutosyncStarter
+// (T5 — deferred start on the first validated bearer, used in HTTP cloud
+// mode when no token is configured in .env). Extracted so neither caller
+// duplicates the transport/manager construction or the startup handshake.
+func startAutosyncManager(ctx context.Context, s *store.Store, serverURL, token string) (autosyncStatusProvider, func(), func(string), error) {
+	remoteMT, err := remote.NewMutationTransport(serverURL, token)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	transport := &mutationTransportAdapter{remote: remoteMT}
 	mgrCfg := autosync.DefaultConfig()
@@ -1055,7 +1070,63 @@ func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (au
 		go mgr.Run(ctx)
 	}
 	log.Printf("[autosync] started (server=%s)", serverURL)
-	return mgr, mgr.Stop, remoteMT.SetToken
+	return mgr, mgr.Stop, remoteMT.SetToken, nil
+}
+
+// lazyAutosyncStarter defers starting the autosync Manager until the first
+// Engram Cloud bearer the HTTP transport's authenticator accepts (T5:
+// bearer-only cloud mode — ENGRAM_CLOUD_SERVER configured, no
+// ENGRAM_CLOUD_TOKEN in .env or cloud.json). It is wired as the
+// setSyncToken hook consumed by newCloudBearerAuthenticator, which invokes
+// it on every validated bearer (the owner-pinning bearer and any later
+// same-owner override — mirroring the token-configured path's "last
+// validated token wins" semantics).
+//
+// The first call starts autosync with that bearer as the sync token,
+// exactly once: sync.Once makes this race-safe under concurrent first
+// requests. Every call (including the first, redundantly but harmlessly)
+// also forwards to the started manager's real SetToken, so later bearers
+// keep overriding the sync token exactly like the token-configured path.
+type lazyAutosyncStarter struct {
+	once sync.Once
+
+	mu         sync.Mutex
+	stopFn     func()
+	setTokenFn func(string)
+}
+
+// hook returns the setSyncToken function to pass to
+// newCloudBearerAuthenticator.
+func (l *lazyAutosyncStarter) hook(ctx context.Context, s *store.Store, serverURL string) func(string) {
+	return func(token string) {
+		l.once.Do(func() {
+			_, stop, setToken, err := startAutosyncManager(ctx, s, serverURL, token)
+			if err != nil {
+				log.Printf("[autosync] ERROR: invalid server URL %q: %v; autosync disabled", serverURL, err)
+				return
+			}
+			l.mu.Lock()
+			l.stopFn, l.setTokenFn = stop, setToken
+			l.mu.Unlock()
+		})
+		l.mu.Lock()
+		setToken := l.setTokenFn
+		l.mu.Unlock()
+		if setToken != nil {
+			setToken(token)
+		}
+	}
+}
+
+// Stop stops the wrapped autosync manager if it ever started; a no-op
+// otherwise (e.g. HTTP server shut down before any bearer was validated).
+func (l *lazyAutosyncStarter) Stop() {
+	l.mu.Lock()
+	stop := l.stopFn
+	l.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // validateMCPHTTPAuthConfig enforces that ENGRAM_MCP_HTTP_TOKEN (the local
@@ -1148,6 +1219,13 @@ func cmdMCP(cfg store.Config) {
 	// startup fatal when cloud config is missing or invalid.
 	ctx, cancel := context.WithCancel(context.Background())
 	_, mgrStop, setSyncToken := tryStartAutosync(ctx, s, cfg)
+	// lazyCloud, when non-nil (T5 — HTTP cloud mode with no ENGRAM_CLOUD_TOKEN
+	// configured), wraps an autosync manager that has not started yet, or
+	// started on the first validated bearer; stopAutosync below must stop it
+	// too, whichever case applies. It is assigned once, before serveMCPHTTP
+	// starts handling requests, so no synchronization is needed on the
+	// variable itself — lazyAutosyncStarter's own mutex protects its state.
+	var lazyCloud *lazyAutosyncStarter
 	// stopAutosync is invoked concurrently: cmdMCP's deferred call runs on the
 	// main goroutine while the stdio EOF unwind hook may call it from the
 	// MCP reader goroutine. sync.Once provides the required synchronization.
@@ -1157,6 +1235,9 @@ func cmdMCP(cfg store.Config) {
 			cancel()
 			if mgrStop != nil {
 				mgrStop()
+			}
+			if lazyCloud != nil {
+				lazyCloud.Stop()
 			}
 		})
 	}
@@ -1173,22 +1254,42 @@ func cmdMCP(cfg store.Config) {
 			AllowedOrigins: strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedOrigins)),
 			AllowedHosts:   strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedHosts)),
 		}
-		// T2: cloud mode was requested (validateMCPHTTPAuthConfig above
-		// already rejected it alongside ENGRAM_MCP_HTTP_TOKEN). If autosync
-		// itself failed to start (setSyncToken == nil — bad/missing
-		// ENGRAM_CLOUD_SERVER or ENGRAM_CLOUD_TOKEN / cloud.json), fail
-		// startup instead of silently serving an unauthenticated endpoint.
+		// T2/T5: cloud mode was requested (validateMCPHTTPAuthConfig above
+		// already rejected it alongside ENGRAM_MCP_HTTP_TOKEN). ENGRAM_CLOUD_SERVER
+		// is always required — fail startup instead of silently serving an
+		// unauthenticated endpoint. ENGRAM_CLOUD_TOKEN is optional: when it is
+		// configured, autosync already started at boot via tryStartAutosync
+		// above (setSyncToken != nil) and behavior is unchanged. When it is
+		// not configured, tryStartAutosync deliberately did not start autosync
+		// (REQ-211 still applies there); a lazyAutosyncStarter defers the
+		// start to the first bearer the authenticator accepts instead of
+		// failing startup (T5 — bearer-only cloud mode).
 		if strings.TrimSpace(os.Getenv("ENGRAM_CLOUD_AUTOSYNC")) == "1" {
-			if setSyncToken == nil {
-				stopAutosync()
-				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 is set but cloud sync could not start (missing or invalid ENGRAM_CLOUD_SERVER / ENGRAM_CLOUD_TOKEN or cloud.json) — fix the cloud configuration or unset ENGRAM_CLOUD_AUTOSYNC to run local-only"))
-			}
 			cc, ccErr := resolveCloudRuntimeConfig(cfg)
 			if ccErr != nil {
 				stopAutosync()
 				fatal(fmt.Errorf("cloud sync config error: %w", ccErr))
 			}
-			httpCfg.CloudAuth = newCloudBearerAuthenticator(cc.ServerURL, cc.Token, setSyncToken, s.EnrollProject)
+			serverURL := strings.TrimSpace(cc.ServerURL)
+			if serverURL == "" {
+				stopAutosync()
+				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 is set but ENGRAM_CLOUD_SERVER is missing or invalid — set ENGRAM_CLOUD_SERVER (or run `engram cloud config --server <url>`) or unset ENGRAM_CLOUD_AUTOSYNC to run local-only"))
+			}
+			if setSyncToken == nil && strings.TrimSpace(cc.Token) != "" {
+				// A token is configured but autosync still failed to start
+				// (e.g. NewMutationTransport rejected the resolved server
+				// URL) — fail fast as before rather than serve without sync.
+				stopAutosync()
+				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 is set but cloud sync could not start (invalid ENGRAM_CLOUD_SERVER / ENGRAM_CLOUD_TOKEN or cloud.json) — fix the cloud configuration or unset ENGRAM_CLOUD_AUTOSYNC to run local-only"))
+			}
+			if setSyncToken == nil {
+				// T5: bearer-only cloud mode — no ENGRAM_CLOUD_TOKEN anywhere.
+				// Start autosync lazily on the first validated bearer instead
+				// of failing startup.
+				lazyCloud = &lazyAutosyncStarter{}
+				setSyncToken = lazyCloud.hook(ctx, s, serverURL)
+			}
+			httpCfg.CloudAuth = newCloudBearerAuthenticator(serverURL, cc.Token, setSyncToken, s.EnrollProject)
 		}
 		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {
 			stopAutosync()
