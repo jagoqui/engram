@@ -16,10 +16,33 @@ This page gives one recommended path first. Advanced/authenticated mode follows 
 docker compose -f docker-compose.cloud.yml up -d
 ```
 
-`docker-compose.cloud.yml` defaults on this branch:
+`docker-compose.cloud.yml` defaults with no env file:
 - `ENGRAM_CLOUD_INSECURE_NO_AUTH=1`
 - `ENGRAM_CLOUD_ALLOWED_PROJECTS=smoke-project`
 - cloud endpoint published at `http://127.0.0.1:18080`
+
+Every value above (and Postgres credentials, `ENGRAM_JWT_SECRET`, bind
+addresses/ports) is configurable from a dedicated env file — separate from
+the engram-http stack's root `.env` so the two never collide:
+
+```bash
+cp docker/cloud/env.example .env.cloud
+# edit .env.cloud for your deployment
+docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d
+```
+
+To enable managed (bootstrap-issued) user tokens instead of the legacy
+`ENGRAM_CLOUD_TOKEN`/`ENGRAM_CLOUD_ADMIN` env-token model, set
+`ENGRAM_CLOUD_TOKEN_PEPPER` in `.env.cloud` (distinct from
+`ENGRAM_JWT_SECRET`), then bootstrap the first admin inside the running
+container:
+
+```bash
+docker exec -it engram-cloud engram cloud bootstrap admin \
+  --username <u> --email <e> --grant-project <p> --issue-token <name>
+```
+
+See [Managed Users and CLI Bootstrap](#managed-users-and-cli-bootstrap) below.
 
 ### 2) Configure CLI cloud endpoint
 

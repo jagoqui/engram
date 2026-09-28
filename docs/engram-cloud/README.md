@@ -28,6 +28,8 @@ engram cloud enroll smoke-project
 engram sync --cloud --project smoke-project
 ```
 
+The compose file above is fully env-driven (bind/ports, Postgres credentials, secrets, allowlist) via a dedicated `.env.cloud` — see [Quickstart: env file and bootstrap](./quickstart.md#recommended-path-local-smoke-docker-compose) for the real-server setup and the `--env-file .env.cloud` flag.
+
 Continue with full verification and expected outputs in [Quickstart](./quickstart.md).
 
 ---
