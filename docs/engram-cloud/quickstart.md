@@ -219,7 +219,7 @@ Notes:
 - `ENGRAM_CLOUD_TOKEN` is the bearer token clients use for authenticated sync.
 - `ENGRAM_CLOUD_ADMIN` is the dashboard admin token. Use a different secret from `ENGRAM_CLOUD_TOKEN`.
 - `ENGRAM_JWT_SECRET` must be an explicit, non-default strong secret in authenticated mode.
-- `ENGRAM_CLOUD_ALLOWED_PROJECTS` is required server-side and should be a comma-separated allowlist.
+- `ENGRAM_CLOUD_ALLOWED_PROJECTS` is required server-side and should be a comma-separated allowlist. Set it to `*` to allow every project (sync and dashboard). Managed users still need an exact per-project grant; grants do not accept a wildcard.
 - `ENGRAM_CLOUD_MAX_PUSH_BYTES` optionally raises or lowers the server-side limit for chunk and mutation push request bodies. Omit it to keep the default 8 MiB limit.
 
 ## Managed Users and CLI Bootstrap

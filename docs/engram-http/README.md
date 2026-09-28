@@ -171,6 +171,18 @@ user: "10001:10001"
 
 ---
 
+## Inspect your memories
+
+The terminal UI reads the local SQLite store, so run it in the **engram-http** container:
+
+```bash
+docker exec -it -e TERM=xterm-256color engram-http engram tui
+```
+
+Running `engram tui` inside the `engram-cloud` container shows nothing: the cloud server keeps its data in Postgres, not in a local SQLite store. Browse synced memories in the cloud dashboard instead (`http://localhost:18080/dashboard`, or your cloud URL), signing in with your cloud token. The dashboard only lists projects allowed by `ENGRAM_CLOUD_ALLOWED_PROJECTS` (use `*` for all).
+
+---
+
 ## Next steps
 
 - [Agent Setup](../AGENT-SETUP.md#any-other-mcp-agent) — generic `http` MCP transport wiring
