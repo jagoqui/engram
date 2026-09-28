@@ -3661,7 +3661,7 @@ func TestMemDoctorOmittedProjectUsesAutoDetectedScope(t *testing.T) {
 	dir := t.TempDir()
 	initTestGitRepo(t, dir)
 	t.Chdir(dir)
-	detected, err := resolveWriteProject()
+	detected, err := resolveWriteProject(context.Background())
 	if err != nil {
 		t.Fatalf("resolveWriteProject: %v", err)
 	}
@@ -5026,7 +5026,7 @@ func TestSessionEndFailsClosedWhenRepositoryBindingUnavailable(t *testing.T) {
 	initTestGitRepo(t, dir)
 	t.Chdir(dir)
 
-	initial, err := resolveWriteProject()
+	initial, err := resolveWriteProject(context.Background())
 	if err != nil {
 		t.Fatalf("create repository binding: %v", err)
 	}
@@ -7516,7 +7516,7 @@ func TestResolveWriteProject_AutoDetects(t *testing.T) {
 	initTestGitRepo(t, dir)
 	t.Chdir(dir)
 
-	res, err := resolveWriteProject()
+	res, err := resolveWriteProject(context.Background())
 	if err != nil {
 		t.Fatalf("resolveWriteProject: %v", err)
 	}
@@ -7544,7 +7544,7 @@ func TestResolveWriteProject_UsesConfigFromRepoRootSubdir(t *testing.T) {
 	}
 	t.Chdir(subdir)
 
-	res, err := resolveWriteProject()
+	res, err := resolveWriteProject(context.Background())
 	if err != nil {
 		t.Fatalf("resolveWriteProject: %v", err)
 	}
@@ -7564,7 +7564,7 @@ func TestResolveWriteProject_InvalidConfigFailsClearly(t *testing.T) {
 	}
 	t.Chdir(dir)
 
-	_, err := resolveWriteProject()
+	_, err := resolveWriteProject(context.Background())
 	if !errors.Is(err, project.ErrInvalidConfig) || !strings.Contains(err.Error(), "project_name") {
 		t.Fatalf("expected clear invalid config project_name error, got %v", err)
 	}
@@ -7666,7 +7666,7 @@ func TestResolveWriteProject_AmbiguousError(t *testing.T) {
 	}
 	t.Chdir(parent)
 
-	_, err := resolveWriteProject()
+	_, err := resolveWriteProject(context.Background())
 	if !errors.Is(err, project.ErrAmbiguousProject) {
 		t.Errorf("expected ErrAmbiguousProject, got %v", err)
 	}
@@ -7683,7 +7683,7 @@ func TestResolveReadProject_WithOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	res, err := resolveReadProject(s, "known-project")
+	res, err := resolveReadProject(context.Background(), s, "known-project")
 	if err != nil {
 		t.Fatalf("resolveReadProject: %v", err)
 	}
@@ -7703,7 +7703,7 @@ func TestResolveReadProject_UnknownOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	_, err := resolveReadProject(s, "does-not-exist")
+	_, err := resolveReadProject(context.Background(), s, "does-not-exist")
 	if err == nil {
 		t.Fatal("expected error for unknown project override")
 	}
@@ -7723,7 +7723,7 @@ func TestResolveReadProject_UnknownOverrideStatsGenerationChange(t *testing.T) {
 	})
 
 	s := newMCPTestStore(t)
-	res, err := resolveReadProject(s, "does-not-exist")
+	res, err := resolveReadProject(context.Background(), s, "does-not-exist")
 	if !errors.Is(err, store.ErrDatabaseGenerationChanged) {
 		t.Fatalf("resolveReadProject error = %v; want ErrDatabaseGenerationChanged", err)
 	}
@@ -8500,7 +8500,7 @@ func TestResolveReadProject_NormalizesOverride(t *testing.T) {
 	t.Chdir(dir)
 
 	// Pass mixed-case and padded override — must normalize to "myapp".
-	res, err := resolveReadProject(s, "  MyApp  ")
+	res, err := resolveReadProject(context.Background(), s, "  MyApp  ")
 	if err != nil {
 		t.Fatalf("resolveReadProject with mixed-case override: %v", err)
 	}
@@ -9657,7 +9657,7 @@ func TestProcessOverrideReadResolutionBeforeCWD(t *testing.T) {
 	if err := s.CreateSession("trusted-project-session", "trusted project", t.TempDir()); err != nil {
 		t.Fatalf("seed trusted project: %v", err)
 	}
-	res, err := resolveReadProjectWithProcessOverride(s, "", "Trusted Project")
+	res, err := resolveReadProjectWithProcessOverride(context.Background(), s, "", "Trusted Project")
 	if err != nil {
 		t.Fatalf("resolve read with process override: %v", err)
 	}
@@ -9668,7 +9668,7 @@ func TestProcessOverrideReadResolutionBeforeCWD(t *testing.T) {
 
 func TestProcessOverrideReadKeepsPerCallValidation(t *testing.T) {
 	s := newMCPTestStore(t)
-	_, err := resolveReadProjectWithProcessOverride(s, "missing-project", "trusted-project")
+	_, err := resolveReadProjectWithProcessOverride(context.Background(), s, "missing-project", "trusted-project")
 	if err == nil {
 		t.Fatal("expected unknown project error for per-call override")
 	}
@@ -9680,7 +9680,7 @@ func TestProcessOverrideReadKeepsPerCallValidation(t *testing.T) {
 
 func TestProcessOverrideSaveWriteKeepsExplicitEmptyProjectInvalid(t *testing.T) {
 	s := newMCPTestStore(t)
-	_, err := resolveSaveWriteProjectWithProcessOverride(s, "", true, "", "", nil, "Trusted Project")
+	_, err := resolveSaveWriteProjectWithProcessOverride(context.Background(), s, "", true, "", "", nil, "Trusted Project")
 	if err == nil {
 		t.Fatal("expected invalid explicit project error")
 	}
@@ -9702,7 +9702,7 @@ func TestProcessOverrideSaveWriteResolutionBeforeCWD(t *testing.T) {
 	t.Chdir(parent)
 
 	s := newMCPTestStore(t)
-	detRes, err := resolveSaveWriteProjectWithProcessOverride(s, "", false, "", "", nil, "Trusted Project")
+	detRes, err := resolveSaveWriteProjectWithProcessOverride(context.Background(), s, "", false, "", "", nil, "Trusted Project")
 	if err != nil {
 		t.Fatalf("resolve save write with process override: %v", err)
 	}

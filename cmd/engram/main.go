@@ -75,6 +75,12 @@ var (
 	resolveMCPTools        = mcp.ResolveTools
 	serveMCP               = runMCPStdio
 
+	// serveMCPHTTP serves the streamable HTTP MCP transport (`engram mcp
+	// --transport=http`). It mirrors serveMCP's seam so tests can stub it.
+	// runMCPHTTP wires SIGINT/SIGTERM the same way runMCPStdio does, then
+	// blocks in mcp.ServeHTTP until the context is canceled or it errors.
+	serveMCPHTTP = runMCPHTTP
+
 	// mcpStdioInput is the raw stdin source for the MCP stdio transport. It is
 	// injectable for testing so tests can drive EOF-driven shutdown with an
 	// os.Pipe instead of the real stdin. runMCPStdio wraps it in exactly one
@@ -97,6 +103,11 @@ var (
 	listenMCPStdio = func(ctx context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer) error {
 		return mcpserver.NewStdioServer(server).Listen(ctx, stdin, stdout)
 	}
+
+	// mcpServeHTTP runs the streamable HTTP MCP transport. Injectable for
+	// testing so runMCPHTTP's signal-to-cancel wiring can be verified
+	// without binding a real socket.
+	mcpServeHTTP = mcp.ServeHTTP
 
 	// detectProject is injectable for testing; wraps project.DetectProject.
 	detectProject = project.DetectProject
@@ -1050,21 +1061,27 @@ func cmdMCP(cfg store.Config) {
 	}
 
 	toolsFilter := ""
+	// transportFlag/listenFlag configure the MCP transport. Default stays
+	// stdio (byte-for-byte unchanged); --transport=http switches to the
+	// streamable HTTP transport (see internal/mcp/httptransport.go).
+	transportFlag := "stdio"
+	listenFlag := ""
 	// The --project flag below is the explicit process argument of the shared
 	// override rule; project.ProcessOverride supplies the ENGRAM_PROJECT step.
 	projectOverride, _ := project.ProcessOverride("")
 	for i := 2; i < len(os.Args); i++ {
-		if strings.HasPrefix(os.Args[i], "--tools=") {
+		switch {
+		case strings.HasPrefix(os.Args[i], "--tools="):
 			toolsFilter = strings.TrimPrefix(os.Args[i], "--tools=")
-		} else if os.Args[i] == "--tools" && i+1 < len(os.Args) {
+		case os.Args[i] == "--tools" && i+1 < len(os.Args):
 			toolsFilter = os.Args[i+1]
 			i++
-		} else if strings.HasPrefix(os.Args[i], "--project=") {
+		case strings.HasPrefix(os.Args[i], "--project="):
 			projectOverride = strings.TrimSpace(strings.TrimPrefix(os.Args[i], "--project="))
 			if projectOverride == "" {
 				fatal(fmt.Errorf("--project requires a value"))
 			}
-		} else if os.Args[i] == "--project" {
+		case os.Args[i] == "--project":
 			if i+1 >= len(os.Args) {
 				fatal(fmt.Errorf("--project requires a value"))
 			}
@@ -1073,7 +1090,28 @@ func cmdMCP(cfg store.Config) {
 				fatal(fmt.Errorf("--project requires a value"))
 			}
 			i++
+		case strings.HasPrefix(os.Args[i], "--transport="):
+			transportFlag = strings.TrimSpace(strings.TrimPrefix(os.Args[i], "--transport="))
+		case os.Args[i] == "--transport":
+			if i+1 >= len(os.Args) {
+				fatal(fmt.Errorf("--transport requires a value"))
+			}
+			transportFlag = strings.TrimSpace(os.Args[i+1])
+			i++
+		case strings.HasPrefix(os.Args[i], "--listen="):
+			listenFlag = strings.TrimSpace(strings.TrimPrefix(os.Args[i], "--listen="))
+		case os.Args[i] == "--listen":
+			if i+1 >= len(os.Args) {
+				fatal(fmt.Errorf("--listen requires a value"))
+			}
+			listenFlag = strings.TrimSpace(os.Args[i+1])
+			i++
 		}
+	}
+	switch transportFlag {
+	case "stdio", "http":
+	default:
+		fatal(fmt.Errorf("--transport must be %q or %q, got %q", "stdio", "http", transportFlag))
 	}
 
 	s, err := storeNew(cfg)
@@ -1104,6 +1142,18 @@ func cmdMCP(cfg store.Config) {
 	mcpCfg := mcp.MCPConfig{DefaultProject: projectOverride}
 	allowlist := resolveMCPTools(toolsFilter)
 	mcpSrv := newMCPServerWithConfig(s, mcpCfg, allowlist)
+
+	if transportFlag == "http" {
+		httpCfg := mcp.HTTPTransportConfig{
+			ListenAddr: listenFlag,
+			LocalToken: strings.TrimSpace(os.Getenv(mcp.EnvHTTPToken)),
+		}
+		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {
+			stopAutosync()
+			fatal(err)
+		}
+		return
+	}
 
 	// Publish the once-guarded autosync stop to the stdio transport so an
 	// EOF- or signal-initiated unwind (issue #886) releases the sync lease
@@ -1174,6 +1224,31 @@ func runMCPStdio(server *mcpserver.MCPServer, _ ...mcpserver.StdioOption) error 
 		return nil
 	}
 	return err
+}
+
+// runMCPHTTP serves the streamable HTTP MCP transport, wiring the same
+// SIGINT/SIGTERM graceful-shutdown pattern as runMCPStdio: a signal cancels
+// the context mcp.ServeHTTP is running under, which triggers its internal
+// http.Server.Shutdown.
+func runMCPHTTP(ctx context.Context, srv *mcpserver.MCPServer, cfg mcp.HTTPTransportConfig) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	notifySignals(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals(sigCh)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigCh:
+			log.Println("[engram] shutting down...")
+			cancel()
+		case <-done:
+		}
+	}()
+
+	return mcpServeHTTP(runCtx, srv, cfg)
 }
 
 // eofShutdownReader is the single reader between the MCP stdio transport and
@@ -3661,13 +3736,20 @@ Usage:
 
 Commands:
   serve [port]       Start HTTP API server (default: 7437)
-  mcp [--tools=PROFILE] [--project NAME]
-                     Start MCP server (stdio transport, for any AI agent)
+  mcp [--tools=PROFILE] [--project NAME] [--transport stdio|http] [--listen ADDR]
+                     Start MCP server (stdio transport by default, for any AI agent)
                         Profiles: agent (18 tools), admin (4 tools), all (default, 22)
                        Combine: --tools=agent,admin or pick individual tools
                        Example: engram mcp --tools=agent
                        --project NAME  Set process-level default project (overrides cwd detection).
                                        Also accepted as ENGRAM_PROJECT=NAME env var.
+                       --transport http  Serve over streamable HTTP instead of stdio.
+                                       Endpoint: POST/GET/DELETE /mcp, GET /health.
+                                       Per-request project comes from the X-Engram-Subproject
+                                       header (alias X-Engram-Project); no cwd fallback over HTTP.
+                       --listen ADDR   Bind address for --transport http (default 127.0.0.1:7438).
+                                       Also accepted as ENGRAM_MCP_HTTP_ADDR=ADDR env var (flag wins).
+                                       Set ENGRAM_MCP_HTTP_TOKEN to require a matching bearer token.
   tui                Launch interactive terminal UI
   test [suite] [--quick] [--json]
                      Run isolated local reliability and performance self-tests

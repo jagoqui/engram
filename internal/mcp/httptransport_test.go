@@ -1,0 +1,286 @@
+package mcp
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	mcpclient "github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	mcppkg "github.com/mark3labs/mcp-go/mcp"
+)
+
+// ─── --listen / ENGRAM_MCP_HTTP_ADDR precedence ───────────────────────────
+
+func TestResolveHTTPListenAddr_Default(t *testing.T) {
+	t.Setenv(EnvHTTPListenAddr, "")
+	if got := ResolveHTTPListenAddr(""); got != DefaultHTTPListenAddr {
+		t.Fatalf("ResolveHTTPListenAddr(\"\") = %q; want %q", got, DefaultHTTPListenAddr)
+	}
+}
+
+func TestResolveHTTPListenAddr_EnvOverridesDefault(t *testing.T) {
+	t.Setenv(EnvHTTPListenAddr, "0.0.0.0:9999")
+	if got := ResolveHTTPListenAddr(""); got != "0.0.0.0:9999" {
+		t.Fatalf("ResolveHTTPListenAddr(\"\") = %q; want env value", got)
+	}
+}
+
+func TestResolveHTTPListenAddr_FlagWinsOverEnv(t *testing.T) {
+	t.Setenv(EnvHTTPListenAddr, "0.0.0.0:9999")
+	if got := ResolveHTTPListenAddr("127.0.0.1:1234"); got != "127.0.0.1:1234" {
+		t.Fatalf("ResolveHTTPListenAddr(flag) = %q; want flag value", got)
+	}
+}
+
+// ─── Header extraction: X-Engram-Subproject wins over its alias ──────────
+
+func TestRequestProjectHeader_SubprojectWinsOverAlias(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("X-Engram-Subproject", "Subproject Name")
+	req.Header.Set("X-Engram-Project", "alias-name")
+	if got := requestProjectHeader(req); got != "subproject name" {
+		t.Fatalf("requestProjectHeader = %q; want %q", got, "subproject name")
+	}
+}
+
+func TestRequestProjectHeader_AliasUsedWhenSubprojectAbsent(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("X-Engram-Project", "  Alias Project  ")
+	if got := requestProjectHeader(req); got != "alias project" {
+		t.Fatalf("requestProjectHeader = %q; want %q", got, "alias project")
+	}
+}
+
+func TestRequestProjectHeader_AbsentReturnsEmpty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	if got := requestProjectHeader(req); got != "" {
+		t.Fatalf("requestProjectHeader = %q; want empty", got)
+	}
+}
+
+// ─── Bearer token extraction ───────────────────────────────────────────────
+
+func TestBearerToken_ExtractsFromAuthorizationHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer abc123")
+	if got := bearerToken(req); got != "abc123" {
+		t.Fatalf("bearerToken = %q; want %q", got, "abc123")
+	}
+}
+
+func TestBearerToken_AbsentOrMalformedReturnsEmpty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	if got := bearerToken(req); got != "" {
+		t.Fatalf("bearerToken (absent) = %q; want empty", got)
+	}
+	req.Header.Set("Authorization", "Basic abc123")
+	if got := bearerToken(req); got != "" {
+		t.Fatalf("bearerToken (non-bearer scheme) = %q; want empty", got)
+	}
+}
+
+// ─── Local bearer guard: 401 vs pass-through ──────────────────────────────
+
+func okHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func TestWithLocalBearerGuard_NoTokenConfiguredIsNoOp(t *testing.T) {
+	srv := httptest.NewServer(withLocalBearerGuard(okHandler(), ""))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (no guard configured)", resp.StatusCode)
+	}
+}
+
+func TestWithLocalBearerGuard_MatchingTokenPasses(t *testing.T) {
+	srv := httptest.NewServer(withLocalBearerGuard(okHandler(), "expected-token"))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer expected-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (matching token)", resp.StatusCode)
+	}
+}
+
+func TestWithLocalBearerGuard_MismatchedOrMissingTokenRejected(t *testing.T) {
+	srv := httptest.NewServer(withLocalBearerGuard(okHandler(), "expected-token"))
+	defer srv.Close()
+
+	// Missing Authorization header entirely.
+	resp, err := http.Get(srv.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status (missing token) = %d; want 401", resp.StatusCode)
+	}
+
+	// Wrong token.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status (wrong token) = %d; want 401", resp2.StatusCode)
+	}
+}
+
+func TestWithLocalBearerGuard_HealthExemptFromGuard(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/mcp", okHandler())
+	srv := httptest.NewServer(withLocalBearerGuard(mux, "expected-token"))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/health status = %d; want 200 even without a token", resp.StatusCode)
+	}
+}
+
+// ─── Loopback detection for the non-loopback startup warning ─────────────
+
+func TestIsLoopbackAddr(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:7438", true},
+		{"localhost:7438", true},
+		{"[::1]:7438", true},
+		{":7438", true},
+		{"0.0.0.0:7438", false},
+		{"192.168.1.5:7438", false},
+	}
+	for _, tt := range tests {
+		if got := isLoopbackAddr(tt.addr); got != tt.want {
+			t.Errorf("isLoopbackAddr(%q) = %v; want %v", tt.addr, got, tt.want)
+		}
+	}
+}
+
+// ─── GET /health via the full handler ─────────────────────────────────────
+
+func TestNewHTTPHandler_Health(t *testing.T) {
+	s := newMCPTestStore(t)
+	mcpSrv := NewServerWithConfig(s, MCPConfig{}, nil)
+	handler := NewHTTPHandler(mcpSrv, HTTPTransportConfig{})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+}
+
+// ─── End-to-end: initialize + tools/call mem_save then mem_search over
+// streamable HTTP, using only the X-Engram-Subproject header (no explicit
+// project tool argument) to prove header-driven project resolution. ───────
+
+func TestHTTPTransport_SaveThenSearchUsesHeaderProject(t *testing.T) {
+	s := newMCPTestStore(t)
+	mcpSrv := NewServerWithConfig(s, MCPConfig{}, nil)
+	handler := NewHTTPHandler(mcpSrv, HTTPTransportConfig{})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	headers := map[string]string{
+		"X-Engram-Subproject": "http e2e project",
+	}
+	c, err := mcpclient.NewStreamableHttpClient(srv.URL+"/mcp", transport.WithHTTPHeaders(headers))
+	if err != nil {
+		t.Fatalf("new streamable http client: %v", err)
+	}
+	defer c.Close()
+
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	initReq := mcppkg.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcppkg.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcppkg.Implementation{Name: "engram-http-e2e-test", Version: "0.0.0"}
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	saveReq := mcppkg.CallToolRequest{}
+	saveReq.Params.Name = "mem_save"
+	saveReq.Params.Arguments = map[string]any{
+		"title":   "HTTP transport e2e",
+		"content": "Saved over streamable HTTP using only the subproject header.",
+	}
+	saveRes, err := c.CallTool(ctx, saveReq)
+	if err != nil {
+		t.Fatalf("call mem_save: %v", err)
+	}
+	if saveRes.IsError {
+		t.Fatalf("mem_save returned an error result: %+v", saveRes.Content)
+	}
+
+	searchReq := mcppkg.CallToolRequest{}
+	searchReq.Params.Name = "mem_search"
+	searchReq.Params.Arguments = map[string]any{
+		"query": "streamable HTTP",
+	}
+	searchRes, err := c.CallTool(ctx, searchReq)
+	if err != nil {
+		t.Fatalf("call mem_search: %v", err)
+	}
+	if searchRes.IsError {
+		t.Fatalf("mem_search returned an error result: %+v", searchRes.Content)
+	}
+
+	text, ok := mcppkg.AsTextContent(searchRes.Content[0])
+	if !ok {
+		t.Fatalf("expected text content in mem_search result")
+	}
+	if !strings.Contains(text.Text, "HTTP transport e2e") {
+		t.Fatalf("mem_search result missing saved observation, got: %s", text.Text)
+	}
+
+	// Confirm the observation actually landed under the header project, not
+	// some cwd-detected or default bucket.
+	obs, err := s.RecentObservations("http e2e project", "project", 5)
+	if err != nil {
+		t.Fatalf("recent observations: %v", err)
+	}
+	if len(obs) == 0 {
+		t.Fatal("expected the observation to be stored under the header project")
+	}
+}

@@ -12,7 +12,13 @@ Do not put core behavior in the command if it can live in a testable package. Th
 
 ## MCP: `internal/mcp`
 
-`internal/mcp/mcp.go` exposes Engram to agents over stdio. It has tool profiles:
+`internal/mcp/mcp.go` exposes Engram to agents over stdio by default, or over
+streamable HTTP with `engram mcp --transport=http` (`internal/mcp/httptransport.go`;
+endpoint `/mcp`, liveness at `/health`). Over HTTP, the per-request project comes
+from the `X-Engram-Subproject` header (alias `X-Engram-Project`) instead of cwd
+detection — the server process's own working directory has no relationship to a
+remote client. Set `ENGRAM_MCP_HTTP_TOKEN` to require a matching bearer token;
+container/Docker deployment specifics live in the setup docs. It has tool profiles:
 
 | Profile | Use |
 |---|---|
