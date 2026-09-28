@@ -1,0 +1,56 @@
+# Engram HTTP — streamable MCP over HTTP in a container, no binary on the
+# host. Personal/single-user deployment; NOT a multi-tenant hosted MCP
+# server. See docs/engram-http/README.md for client config, auth modes, and
+# the "adopt an existing data dir" section.
+#
+# Usage:
+#   cp docker/http/env.example .env   # optional — only needed for a local
+#                                      # token or cloud sync
+#   docker compose -f docker-compose.http.yml up -d
+#   curl http://127.0.0.1:7438/health
+#
+# Cleanup:
+#   docker compose -f docker-compose.http.yml down -v
+
+services:
+  engram-http:
+    build:
+      context: .
+      dockerfile: docker/http/Dockerfile
+    container_name: engram-http
+    environment:
+      ENGRAM_DATA_DIR: /data
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:7438:7438"
+    volumes:
+      - engram-http-data:/data
+      # --- Adopt an existing engram data dir instead of the named volume ---
+      # WARNING: never bind-mount a data dir a HOST `engram` process is also
+      # using live. SQLite WAL -shm/-wal locking is unreliable across the
+      # Docker Desktop VM boundary on macOS/Windows, and two writers can
+      # corrupt the database even on Linux. Stop the host engram first (or
+      # point this at a COPY of ~/.engram), and chown the directory to uid
+      # 10001 (or set `user: "10001:10001"` on this service) so the
+      # container can write to it. See
+      # docs/engram-http/README.md#adopt-an-existing-engram-data-dir.
+      # - ${HOME}/.engram:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7438/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    # To sync this container with a running Engram Cloud instance (separate
+    # image — see docker-compose.cloud.yml), set ENGRAM_CLOUD_AUTOSYNC=1,
+    # ENGRAM_CLOUD_SERVER, and ENGRAM_CLOUD_TOKEN in .env, then uncomment:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    # and point ENGRAM_CLOUD_SERVER at http://host.docker.internal:18080.
+    # This file never merges the cloud and http services — they stay two
+    # independent images/compose stacks. See docs/engram-cloud/README.md.
+
+volumes:
+  engram-http-data:

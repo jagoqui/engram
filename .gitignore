@@ -13,6 +13,9 @@
 # Export files
 engram-export.json
 
+# Local environment files (docker-compose.http.yml env_file)
+.env
+
 # OS
 .DS_Store
 Thumbs.db
