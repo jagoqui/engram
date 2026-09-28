@@ -1,15 +1,32 @@
+# Engram Cloud — local smoke / dev stack. Defaults below reproduce the
+# original insecure dev smoke profile exactly, so a plain
+# `docker compose -f docker-compose.cloud.yml up` still behaves the same as
+# before these vars existed. Every value is overridable from an env file so
+# this same compose file can run on a real server. See docker/cloud/env.example
+# and docs/engram-cloud/quickstart.md.
+#
+# Usage (dev smoke, unchanged):
+#   docker compose -f docker-compose.cloud.yml up -d
+#
+# Usage (configured, e.g. production-leaning):
+#   cp docker/cloud/env.example .env.cloud
+#   docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d
+#
+# .env.cloud is a separate file from the engram-http stack's root `.env` so
+# the two stacks' secrets never collide when both run from this directory.
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: engram-cloud-postgres
     environment:
-      POSTGRES_USER: engram
-      POSTGRES_PASSWORD: engram_dev
-      POSTGRES_DB: engram_cloud
+      POSTGRES_USER: ${POSTGRES_USER:-engram}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-engram_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-engram_cloud}
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${ENGRAM_CLOUD_POSTGRES_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U engram -d engram_cloud"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-engram} -d ${POSTGRES_DB:-engram_cloud}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,20 +42,26 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      ENGRAM_DATABASE_URL: postgres://engram:engram_dev@postgres:5432/engram_cloud?sslmode=disable
-      ENGRAM_JWT_SECRET: engram-dev-jwt-secret-for-local-smoke-1234
-      ENGRAM_CLOUD_INSECURE_NO_AUTH: "1"
-      ENGRAM_CLOUD_ALLOWED_PROJECTS: smoke-project
+      ENGRAM_DATABASE_URL: ${ENGRAM_DATABASE_URL:-postgres://${POSTGRES_USER:-engram}:${POSTGRES_PASSWORD:-engram_dev}@postgres:5432/${POSTGRES_DB:-engram_cloud}?sslmode=disable}
+      ENGRAM_JWT_SECRET: ${ENGRAM_JWT_SECRET:-engram-dev-jwt-secret-for-local-smoke-1234}
+      ENGRAM_CLOUD_INSECURE_NO_AUTH: ${ENGRAM_CLOUD_INSECURE_NO_AUTH:-1}
+      ENGRAM_CLOUD_ALLOWED_PROJECTS: ${ENGRAM_CLOUD_ALLOWED_PROJECTS:-smoke-project}
       ENGRAM_CLOUD_HOST: 0.0.0.0
       ENGRAM_PORT: "18080"
-      # ENGRAM_CLOUD_TOKEN_PEPPER: replace-with-dedicated-managed-token-pepper
-      # Required both to run `engram cloud bootstrap admin --issue-token`
-      # against this stack AND to make the resulting managed tokens actually
-      # authenticate against this running server. Must be a secret distinct
-      # from ENGRAM_JWT_SECRET above. Left commented out here because this
-      # stack runs in ENGRAM_CLOUD_INSECURE_NO_AUTH mode by default.
+      # Legacy bearer token. NOTE: authenticated `cloud serve` (i.e. when
+      # ENGRAM_CLOUD_INSECURE_NO_AUTH is not "1") currently REQUIRES this to
+      # be set even when clients authenticate with managed tokens instead.
+      # Empty is fine in the default insecure-smoke profile.
+      ENGRAM_CLOUD_TOKEN: ${ENGRAM_CLOUD_TOKEN:-}
+      # Dedicated secret for managed (bootstrap-issued) tokens. Empty means
+      # managed-token auth stays disabled; the server still starts fine.
+      ENGRAM_CLOUD_TOKEN_PEPPER: ${ENGRAM_CLOUD_TOKEN_PEPPER:-}
+      # Legacy dashboard admin token. Must stay empty while
+      # ENGRAM_CLOUD_INSECURE_NO_AUTH=1 (the server refuses to start
+      # otherwise); only set it in authenticated mode.
+      ENGRAM_CLOUD_ADMIN: ${ENGRAM_CLOUD_ADMIN:-}
     ports:
-      - "127.0.0.1:18080:18080"
+      - "${ENGRAM_CLOUD_BIND_ADDR:-127.0.0.1}:${ENGRAM_CLOUD_PUBLISHED_PORT:-18080}:18080"
     command: ["cloud", "serve"]
 
 volumes:

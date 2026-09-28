@@ -9,6 +9,12 @@
 #   docker compose -f docker-compose.http.yml up -d
 #   curl http://127.0.0.1:7438/health
 #
+# On a real server, set ENGRAM_HTTP_BIND_ADDR (default 127.0.0.1) and
+# ENGRAM_HTTP_PUBLISHED_PORT (default 7438) in .env to publish beyond
+# loopback — see docs/engram-http/README.md#security. The container's
+# internal listen address is fixed at 0.0.0.0:7438 (see docker/http/Dockerfile);
+# only the published host bind/port are configurable.
+#
 # Cleanup:
 #   docker compose -f docker-compose.http.yml down -v
 
@@ -24,7 +30,14 @@ services:
       - path: .env
         required: false
     ports:
-      - "127.0.0.1:7438:7438"
+      - "${ENGRAM_HTTP_BIND_ADDR:-127.0.0.1}:${ENGRAM_HTTP_PUBLISHED_PORT:-7438}:7438"
+    # Reaches a cloud stack published on the same host (e.g.
+    # docker-compose.cloud.yml) via the Docker Desktop / Docker Engine
+    # gateway hostname. Harmless when cloud mode isn't configured; only
+    # takes effect if ENGRAM_CLOUD_SERVER in .env points at
+    # host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - engram-http-data:/data
       # --- Adopt an existing engram data dir instead of the named volume ---
@@ -44,13 +57,14 @@ services:
       retries: 5
       start_period: 5s
     # To sync this container with a running Engram Cloud instance (separate
-    # image — see docker-compose.cloud.yml), set ENGRAM_CLOUD_AUTOSYNC=1,
-    # ENGRAM_CLOUD_SERVER, and ENGRAM_CLOUD_TOKEN in .env, then uncomment:
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
-    # and point ENGRAM_CLOUD_SERVER at http://host.docker.internal:18080.
-    # This file never merges the cloud and http services — they stay two
-    # independent images/compose stacks. See docs/engram-cloud/README.md.
+    # image — see docker-compose.cloud.yml), set ENGRAM_CLOUD_AUTOSYNC=1 and
+    # ENGRAM_CLOUD_SERVER in .env (ENGRAM_CLOUD_TOKEN is optional — see
+    # docker/http/env.example). For a cloud stack on this same host, point
+    # ENGRAM_CLOUD_SERVER at http://host.docker.internal:18080 (the
+    # extra_hosts entry above makes that hostname resolve); for a remote
+    # cloud, use its real URL and drop extra_hosts if you prefer. This file
+    # never merges the cloud and http services — they stay two independent
+    # images/compose stacks. See docs/engram-cloud/README.md.
 
 volumes:
   engram-http-data:

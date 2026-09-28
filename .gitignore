@@ -13,8 +13,11 @@
 # Export files
 engram-export.json
 
-# Local environment files (docker-compose.http.yml env_file)
+# Local environment files (docker-compose.http.yml env_file, and
+# docker-compose.cloud.yml --env-file .env.cloud). env.example templates
+# stay tracked — they don't match this pattern (no leading dot).
 .env
+.env.*
 
 # OS
 .DS_Store
