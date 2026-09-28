@@ -136,6 +136,7 @@ docker compose -f docker-compose.http.yml up -d
 
 - **Loopback by default.** `docker-compose.http.yml` publishes `127.0.0.1:7438:7438` — only reachable from the host machine itself.
 - **Exposing beyond loopback** (a shared machine, a LAN, a dedicated server): set `ENGRAM_MCP_HTTP_TOKEN` (local-only mode) or configure cloud mode, and set `ENGRAM_MCP_HTTP_ALLOWED_ORIGINS` / `ENGRAM_MCP_HTTP_ALLOWED_HOSTS` to your client's actual origin/host — these are DNS-rebinding guards, not optional hardening.
+- **Cloud mode with `ENGRAM_CLOUD_TOKEN` set**: requests that send no bearer are served with that token, so anyone who reaches the endpoint can use it. When exposing beyond loopback, leave `ENGRAM_CLOUD_TOKEN` unset (bearer-only mode) so every request must carry a cloud-validated bearer; engram-http logs a startup warning otherwise.
 - **Remote/internet-reachable servers**: put a TLS-terminating reverse proxy in front (Caddy, nginx, Traefik). This image serves plain HTTP only.
 - Chunk/mutation cloud sync traffic is compressed, not encrypted; use HTTPS end to end when cloud mode crosses an untrusted network.
 

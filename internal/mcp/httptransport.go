@@ -77,6 +77,10 @@ type HTTPTransportConfig struct {
 	// and CloudAuth are never both configured; this package deterministically
 	// prefers CloudAuth when both are set.
 	CloudAuth CloudBearerAuthenticator
+	// CloudBearerlessFallback is true when CloudAuth admits requests that send
+	// no bearer by using the configured ENGRAM_CLOUD_TOKEN, so the endpoint
+	// accepts unauthenticated clients.
+	CloudBearerlessFallback bool
 }
 
 // CloudBearerAuthenticator lets the streamable HTTP transport delegate all
@@ -130,11 +134,18 @@ func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Hand
 	return withOriginHostGuard(guarded, cfg)
 }
 
-// warnIfUnauthenticatedListener logs a startup warning only when addr is
-// non-loopback and neither guard is configured: a LocalToken or a CloudAuth
-// (every request needs a cloud-validated bearer) both authenticate requests.
+// warnIfUnauthenticatedListener logs a startup warning when addr is
+// non-loopback and requests can get through without a secret: no guard at
+// all, or a CloudAuth that serves bearer-less requests with the .env token.
 func warnIfUnauthenticatedListener(addr string, cfg HTTPTransportConfig) {
-	if strings.TrimSpace(cfg.LocalToken) == "" && cfg.CloudAuth == nil && !isLoopbackAddr(addr) {
+	if isLoopbackAddr(addr) {
+		return
+	}
+	if cfg.CloudAuth != nil && cfg.CloudBearerlessFallback {
+		log.Printf("[mcp-http] WARNING: listening on %s in cloud mode with ENGRAM_CLOUD_TOKEN configured — requests without a bearer use that token, so this endpoint accepts unauthenticated requests from any reachable client; unset ENGRAM_CLOUD_TOKEN to require a bearer on every request", addr)
+		return
+	}
+	if strings.TrimSpace(cfg.LocalToken) == "" && cfg.CloudAuth == nil {
 		log.Printf("[mcp-http] WARNING: listening on %s with no %s configured — this endpoint accepts unauthenticated requests from any reachable client", addr, EnvHTTPToken)
 	}
 }

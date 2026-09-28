@@ -29,6 +29,8 @@ func TestWarnIfUnauthenticatedListener(t *testing.T) {
 		{"non-loopback, no auth", "0.0.0.0:7438", HTTPTransportConfig{}, true},
 		{"non-loopback, local token", "0.0.0.0:7438", HTTPTransportConfig{LocalToken: "s"}, false},
 		{"non-loopback, cloud auth", "0.0.0.0:7438", HTTPTransportConfig{CloudAuth: &fakeCloudAuth{}}, false},
+		{"non-loopback, cloud auth with .env fallback token", "0.0.0.0:7438", HTTPTransportConfig{CloudAuth: &fakeCloudAuth{}, CloudBearerlessFallback: true}, true},
+		{"loopback, cloud auth with .env fallback token", "127.0.0.1:7438", HTTPTransportConfig{CloudAuth: &fakeCloudAuth{}, CloudBearerlessFallback: true}, false},
 		{"loopback, no auth", "127.0.0.1:7438", HTTPTransportConfig{}, false},
 	}
 	for _, tt := range tests {

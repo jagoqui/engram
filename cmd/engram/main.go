@@ -1312,6 +1312,7 @@ func cmdMCP(cfg store.Config) {
 				setSyncToken = lazyCloud.hook(ctx, s, serverURL)
 			}
 			httpCfg.CloudAuth = newCloudBearerAuthenticator(serverURL, cc.Token, setSyncToken, s.EnrollProject)
+			httpCfg.CloudBearerlessFallback = strings.TrimSpace(cc.Token) != ""
 		}
 		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {
 			stopAutosync()
