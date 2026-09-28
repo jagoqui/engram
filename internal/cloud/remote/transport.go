@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Gentleman-Programming/engram/v2/internal/cloud/chunkcodec"
@@ -342,8 +343,10 @@ func (rt *RemoteTransport) PullMutations(_ int64, _ int) (*PullMutationsResponse
 // mutation journal and supports cursor-based pull.
 type MutationTransport struct {
 	baseURL    string
-	token      string
 	httpClient *http.Client
+
+	tokenMu sync.RWMutex
+	token   string
 }
 
 // NewMutationTransport creates a MutationTransport. baseURL must be a valid HTTP(S) URL;
@@ -360,9 +363,23 @@ func NewMutationTransport(baseURL, token string) (*MutationTransport, error) {
 	}, nil
 }
 
+// SetToken replaces the bearer token this transport authorizes subsequent
+// push/pull calls with. Safe for concurrent use: the HTTP guard may call
+// this from a request goroutine while autosync's Run loop concurrently
+// reads the token to authorize its own push/pull calls (T2 bearer
+// override — "last validated token wins" for a single-user deployment).
+func (mt *MutationTransport) SetToken(token string) {
+	mt.tokenMu.Lock()
+	mt.token = strings.TrimSpace(token)
+	mt.tokenMu.Unlock()
+}
+
 func (mt *MutationTransport) setAuthorization(req *http.Request) {
-	if mt.token != "" {
-		req.Header.Set("Authorization", "Bearer "+mt.token)
+	mt.tokenMu.RLock()
+	token := mt.token
+	mt.tokenMu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }
 
