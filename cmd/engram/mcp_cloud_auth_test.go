@@ -136,3 +136,27 @@ func TestCloudBearerAuthenticator_DifferentPrincipalRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudBearerAuthenticator_RejectedFallbackFailsClosed(t *testing.T) {
+	a := newCloudBearerAuthenticator("https://cloud.example.test", "revoked-env-token", nil, nil)
+	a.validate = func(_, token string) (string, error) {
+		if token == "revoked-env-token" {
+			return "", remote.ErrBearerInvalid
+		}
+		return "acct-attacker", nil
+	}
+	if ok, err := a.Authenticate(context.Background(), "attacker-token", "demo"); err != nil || ok {
+		t.Fatalf("Authenticate = (%v, %v); want (false, nil): a rejected .env token must not let another account become owner", ok, err)
+	}
+}
+
+func TestCloudBearerAuthenticator_CacheHitWithoutPrincipalRevalidates(t *testing.T) {
+	a := newCloudBearerAuthenticator("https://cloud.example.test", "", nil, nil)
+	a.validate = func(_, _ string) (string, error) { return "acct-1", nil }
+	// Simulate the race: the cache already holds a positive entry, but the
+	// validating request has not recorded its principal yet.
+	a.cache.store(bearerCacheKey("bearer-token"), true, bearerCachePositiveTTL)
+	if ok, err := a.Authenticate(context.Background(), "bearer-token", "demo"); err != nil || !ok {
+		t.Fatalf("Authenticate = (%v, %v); want (true, nil)", ok, err)
+	}
+}

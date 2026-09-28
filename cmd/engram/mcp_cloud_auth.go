@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -84,34 +85,59 @@ func (a *cloudBearerAuthenticator) Authenticate(_ context.Context, token, projec
 
 // resolvePrincipal returns token's cloud principal ID via the cache, or "".
 func (a *cloudBearerAuthenticator) resolvePrincipal(token string) (string, error) {
-	var id string
-	valid, err := a.cache.CheckOrValidate(token, func() (verr error) { id, verr = a.validate(a.serverURL, token); return verr })
+	key := bearerCacheKey(token)
+	// record stores the principal before CheckOrValidate caches the positive
+	// result, so a concurrent cache hit never sees a valid token without it.
+	record := func() error {
+		id, err := a.validate(a.serverURL, token)
+		if err == nil {
+			a.mu.Lock()
+			a.principals[key] = id
+			a.mu.Unlock()
+		}
+		return err
+	}
+	valid, err := a.cache.CheckOrValidate(token, record)
 	if err != nil || !valid {
 		return "", err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if id != "" {
-		a.principals[bearerCacheKey(token)] = id
+	id, ok := a.principals[key]
+	a.mu.Unlock()
+	if ok {
+		return id, nil
 	}
-	return a.principals[bearerCacheKey(token)], nil
+	if err := record(); err != nil { // cached as valid but principal unknown: resolve again
+		if errors.Is(err, remote.ErrBearerInvalid) {
+			return "", nil
+		}
+		return "", err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.principals[key], nil
 }
 
-// authorizeOwner pins the owner (the .env fallback's principal, else principalID) on first use, reporting whether principalID matches it.
+// authorizeOwner reports whether principalID is the instance owner: the
+// .env fallback token's principal when one is configured (a rejected
+// fallback fails closed), else the first authorized bearer, pinned for the
+// process lifetime.
 func (a *cloudBearerAuthenticator) authorizeOwner(principalID string) (bool, error) {
-	owner := principalID
 	if a.fallbackToken != "" {
-		if id, err := a.resolvePrincipal(a.fallbackToken); err != nil {
+		owner, err := a.resolvePrincipal(a.fallbackToken)
+		if err != nil {
 			return false, err
-		} else if id != "" {
-			owner = id
 		}
+		if owner == "" {
+			log.Printf("[mcp-http] WARNING: Engram Cloud rejects the configured cloud token; refusing every bearer until it is fixed")
+		}
+		return owner != "" && owner == principalID, nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	pinned, ok := a.principals[""]
 	if !ok {
-		a.principals[""], pinned = owner, owner
+		a.principals[""], pinned = principalID, principalID
 	}
 	return pinned == principalID, nil
 }
