@@ -444,6 +444,40 @@ func TestCmdMCPHTTP_CloudModeNoServerFailsEvenWithToken(t *testing.T) {
 	}
 }
 
+// TestCmdMCPHTTP_CloudModeNonHTTPSServerFailsStartup (T7): the HTTP
+// transport's cloud auth path always sends the request bearer to
+// ENGRAM_CLOUD_SERVER (see cloudBearerAuthenticator.Authenticate ->
+// remote.ValidateBearer), and internal/cloud/remote refuses to send any
+// bearer over plaintext HTTP. Before T7, that refusal only surfaced per
+// request as a 503 once a client connected. Startup must fail fast instead,
+// even in bearer-only mode (no ENGRAM_CLOUD_TOKEN configured).
+func TestCmdMCPHTTP_CloudModeNonHTTPSServerFailsStartup(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+
+	oldNewMCPServerWithConfig := newMCPServerWithConfig
+	t.Cleanup(func() { newMCPServerWithConfig = oldNewMCPServerWithConfig })
+	newMCPServerWithConfig = func(s *store.Store, mcpCfg mcp.MCPConfig, allowlist map[string]bool) *mcpserver.MCPServer {
+		return mcpserver.NewMCPServer("test", "0")
+	}
+
+	t.Setenv("ENGRAM_CLOUD_AUTOSYNC", "1")
+	t.Setenv(mcp.EnvHTTPToken, "")
+	t.Setenv("ENGRAM_CLOUD_SERVER", "http://host.docker.internal:18080")
+	t.Setenv("ENGRAM_CLOUD_TOKEN", "")
+
+	withArgs(t, "engram", "mcp", "--transport=http")
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
+	code, ok := recovered.(exitCode)
+	if !ok || int(code) != 1 {
+		t.Fatalf("expected exit code 1, got %v (stderr=%q)", recovered, stderr)
+	}
+	if !strings.Contains(stderr, "ENGRAM_CLOUD_SERVER") || !strings.Contains(stderr, "HTTPS") {
+		t.Fatalf("expected stderr to explain the non-HTTPS ENGRAM_CLOUD_SERVER, got %q", stderr)
+	}
+}
+
 // TestCmdMCPHTTPGracefulShutdownStopsLazilyStartedAutosync asserts that when
 // autosync started lazily (T5, no ENGRAM_CLOUD_TOKEN) after a request, a
 // later graceful shutdown still stops it — no leak, no double stop.

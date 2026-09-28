@@ -104,15 +104,37 @@ func NewRemoteTransport(baseURL, token, project string) (*RemoteTransport, error
 }
 
 func validateBearerBaseURL(baseURL, token string) (string, string, error) {
-	normalized, err := validateBaseURL(baseURL)
+	token = strings.TrimSpace(token)
+	if token == "" {
+		normalized, err := validateBaseURL(baseURL)
+		if err != nil {
+			return "", "", err
+		}
+		return normalized, token, nil
+	}
+	normalized, err := RequireHTTPSRemote(baseURL)
 	if err != nil {
 		return "", "", err
 	}
-	token = strings.TrimSpace(token)
-	if token != "" && !strings.HasPrefix(normalized, "https://") {
-		return "", "", fmt.Errorf("cloud: bearer token requires an HTTPS remote URL")
-	}
 	return normalized, token, nil
+}
+
+// RequireHTTPSRemote normalizes baseURL and fails unless its scheme is
+// https. It is the single source of truth for "bearer tokens never travel
+// over plaintext HTTP": validateBearerBaseURL reuses it once a token is
+// known, and callers that must enforce the same rule before any token is
+// known — e.g. HTTP MCP transport startup, where every authenticated
+// request will carry a bearer — call it directly instead of duplicating the
+// scheme check.
+func RequireHTTPSRemote(baseURL string) (string, error) {
+	normalized, err := validateBaseURL(baseURL)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(normalized, "https://") {
+		return "", fmt.Errorf("cloud: bearer token requires an HTTPS remote URL")
+	}
+	return normalized, nil
 }
 
 func newRemoteHTTPClient(timeout time.Duration, token string) *http.Client {

@@ -1275,6 +1275,16 @@ func cmdMCP(cfg store.Config) {
 				stopAutosync()
 				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 is set but ENGRAM_CLOUD_SERVER is missing or invalid — set ENGRAM_CLOUD_SERVER (or run `engram cloud config --server <url>`) or unset ENGRAM_CLOUD_AUTOSYNC to run local-only"))
 			}
+			// T7: the HTTP transport's cloud auth path (newCloudBearerAuthenticator
+			// below) sends every request's Authorization bearer to serverURL, even
+			// in bearer-only mode with no ENGRAM_CLOUD_TOKEN configured. engram
+			// refuses to send a bearer over plaintext HTTP (see
+			// remote.RequireHTTPSRemote / validateBearerBaseURL) — fail startup
+			// now with a clear message instead of a 503 on the first request.
+			if _, err := remote.RequireHTTPSRemote(serverURL); err != nil {
+				stopAutosync()
+				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 in HTTP transport mode requires an HTTPS ENGRAM_CLOUD_SERVER (every MCP request carries a bearer engram refuses to send over plaintext HTTP): %w — put a TLS reverse proxy in front of your cloud server (e.g. `docker compose -f docker-compose.cloud.yml --profile tls up`) or set ENGRAM_CLOUD_SERVER to an https:// URL", err))
+			}
 			if setSyncToken == nil && strings.TrimSpace(cc.Token) != "" {
 				// A token is configured but autosync still failed to start
 				// (e.g. NewMutationTransport rejected the resolved server
