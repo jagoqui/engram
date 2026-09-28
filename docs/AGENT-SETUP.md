@@ -762,6 +762,17 @@ Registers `mcpServers.engram` in the user-scope `~/.commandcode/mcp.json` (priva
 
 The pattern is always the same — point your agent's MCP config to `engram mcp` via stdio transport.
 
+### HTTP transport (no binary on the host)
+
+Instead of installing the `engram` binary on the client machine, run it as a container and point any `http`-capable MCP client at it:
+
+```json
+{ "mcpServers": { "engram-remote": { "type": "http", "url": "${env:ENGRAM_REMOTE_URL}",
+  "headers": { "Authorization": "Bearer ${env:ENGRAM_REMOTE_TOKEN}", "X-Engram-Subproject": "${env:ENGRAM_SUBPROJECT}" } } } }
+```
+
+See [Engram HTTP](engram-http/README.md) for the compose file, auth modes (local token vs. Engram Cloud bearer), and security notes. Project resolution over HTTP always comes from the `X-Engram-Subproject` header — there is no cwd fallback.
+
 ---
 
 ## Surviving Compaction (Recommended)

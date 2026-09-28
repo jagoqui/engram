@@ -126,6 +126,7 @@ error naming the offending session.
 `internal/cloud/remote/transport.go` is the client. `internal/cloud/cloudserver/cloudserver.go` is the server. The server mounts:
 
 - `GET /health`
+- `GET /auth/whoami`
 - `GET /sync/pull`
 - `GET /sync/pull/{chunkID}`
 - `POST /sync/push`

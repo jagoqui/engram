@@ -152,6 +152,7 @@ Engram keeps memory local by default. The local SQLite database is authoritative
 | Share memory with Git | [Git Sync reference](DOCS.md#git-sync-chunked) |
 | Use optional Cloud replication | [Engram Cloud](docs/engram-cloud/README.md) |
 | Diagnose or recover Cloud operations | [Cloud troubleshooting](docs/engram-cloud/troubleshooting.md) |
+| Run MCP over HTTP with no binary on the host | [Engram HTTP](docs/engram-http/README.md) |
 
 For an existing local database, use the guided upgrade sequence. If the dry run reports changes, apply them before bootstrap; otherwise continue directly to bootstrap.
 

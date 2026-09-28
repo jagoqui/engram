@@ -74,6 +74,7 @@ For a direct registry-based deploy example, use:
 
 ### Cloud runtime: `engram cloud serve`
 - `GET /health`
+- `GET /auth/whoami` (resolves a bearer's principal; used by [Engram HTTP](../engram-http/README.md) cloud mode)
 - `GET /sync/pull`, `POST /sync/push`
 - `GET /dashboard/*` (browser surfaces)
 
@@ -101,6 +102,7 @@ HTTPS and appropriate deployment controls for transport security.
 | [Production Checklist](./production-checklist.md) | Self-hosted production boundaries, recovery, and operator responsibilities |
 | [GHCR Compose Example](./docker-compose.ghcr.yml) | Pull-and-run deployment sample for Dokploy/Coolify/Portainer/VPS |
 | [Branding](./branding.md) | Engram Cloud visual identity, asset usage, previews |
+| [Engram HTTP](../engram-http/README.md) | Sync a container-hosted MCP server (`engram mcp --transport=http`) with this cloud runtime |
 | [Technical Cloud Reference](../../DOCS.md#cloud-cli-opt-in) | Full CLI + env/runtime details |
 | [Cloud Autosync](../../DOCS.md#cloud-autosync) | Background replication behavior + phase table |
 

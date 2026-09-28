@@ -32,6 +32,7 @@ For other docs:
 | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | [Installation](docs/INSTALLATION.md)        | All install methods + platform support                                                        |
 | [Engram Cloud](docs/engram-cloud/README.md) | Cloud landing page, quickstart path, branding, and reference links                            |
+| [Engram HTTP](docs/engram-http/README.md)   | Run `engram mcp --transport=http` in a container — no binary on the client host               |
 | [Agent Setup](docs/AGENT-SETUP.md)          | Per-agent configuration + compaction survival                                                 |
 | [Codebase Guide](docs/CODEBASE-GUIDE.md)    | Definitive guide to repository structure, package ownership, flows, and maintainer guardrails |
 | [Architecture](docs/ARCHITECTURE.md)        | How it works, session lifecycle, CLI reference, project structure                             |
@@ -76,7 +77,7 @@ For maintainers, distinguish these ownership paths:
 
 ### Documentation surface catalog
 
-This catalog covers the 60 tracked Markdown files. **Owner `GP`** means CODEOWNERS review routing to `@Gentleman-Programming`, not an individual author or content owner. **Canonical** identifies a contract named in the matrix above; **guide** explains or operates alongside contracts; **instruction** directs agents; **policy/template** governs contribution or reuse. **Living** means maintained against current behavior, not a guarantee that every described optional feature is enabled. Beta material describes experimental paths, not universally shipped behavior.
+This catalog covers the 61 tracked Markdown files. **Owner `GP`** means CODEOWNERS review routing to `@Gentleman-Programming`, not an individual author or content owner. **Canonical** identifies a contract named in the matrix above; **guide** explains or operates alongside contracts; **instruction** directs agents; **policy/template** governs contribution or reuse. **Living** means maintained against current behavior, not a guarantee that every described optional feature is enabled. Beta material describes experimental paths, not universally shipped behavior.
 
 | Surface | Audience | Authority | Status | Owner |
 | --- | --- | --- | --- | --- |
@@ -108,6 +109,7 @@ This catalog covers the 60 tracked Markdown files. **Owner `GP`** means CODEOWNE
 | [docs/engram-cloud/production-checklist.md](docs/engram-cloud/production-checklist.md) | Cloud operators | Guide: production checks | Living | GP |
 | [docs/engram-cloud/quickstart.md](docs/engram-cloud/quickstart.md) | Cloud users | Guide: quickstart | Living | GP |
 | [docs/engram-cloud/troubleshooting.md](docs/engram-cloud/troubleshooting.md) | Cloud operators | Guide: troubleshooting | Living | GP |
+| [docs/engram-http/README.md](docs/engram-http/README.md) | HTTP transport users | Guide: containerized MCP-over-HTTP deployment | Living | GP |
 | [docs/intended-usage.md](docs/intended-usage.md) | Users | Guide: intended use | Living | GP |
 | [plugin/claude-code/skills/memory/SKILL.md](plugin/claude-code/skills/memory/SKILL.md) | Claude agents | Instruction: host-adapted memory skill | Living | GP |
 | [plugin/codex/skills/memory/SKILL.md](plugin/codex/skills/memory/SKILL.md) | Codex agents | Instruction: host-adapted memory skill | Living | GP |
@@ -226,6 +228,7 @@ Engram exposes two different runtimes. Keep routes split by runtime:
   - includes `GET /sync/status` (local node sync status)
 - **Cloud runtime (`engram cloud serve`)**
   - `GET /health` (cloud service health)
+  - `GET /auth/whoami` (resolves a bearer token's principal ID; used by [Engram HTTP](docs/engram-http/README.md) cloud mode to bind a request bearer to the instance owner)
   - `GET /sync/pull`, `GET /sync/pull/{chunkID}`, `POST /sync/push`, `POST /sync/mutations/push`, `GET /sync/mutations/pull` (cloud sync transport)
   - `GET /dashboard/*` HTML routes (browser dashboard)
 
