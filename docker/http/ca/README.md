@@ -14,6 +14,10 @@ chmod 644 docker/http/ca/engram-cloud-local-ca.crt  # container runs as uid 1000
 docker compose -f docker-compose.http.yml up -d --force-recreate
 ```
 
+If the Caddy data volume (`engram-cloud-caddy-data`) is ever recreated, Caddy
+generates a NEW local CA: re-export `root.crt` as above and recreate
+engram-http, or its cloud calls fail certificate verification.
+
 Certificates (`*.crt`, `*.pem`) in this directory are git-ignored. A server
 with a publicly trusted certificate (for example Let's Encrypt) needs nothing
 here.

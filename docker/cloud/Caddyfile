@@ -12,7 +12,9 @@
 #     docs/engram-cloud/quickstart.md) so engram-http trusts it.
 #   - an email address: real ACME (Let's Encrypt) issuance for a publicly
 #     reachable server — set ENGRAM_CLOUD_TLS_HOSTS to the real domain and
-#     make sure ports 80/443 are reachable from the internet (see
+#     make sure 443 (TLS-ALPN-01) is reachable from the internet, and
+#     80 too for HTTP-01: on a server set ENGRAM_CLOUD_TLS_PORT=443 and
+#     ENGRAM_CLOUD_TLS_HTTP_PORT=80 (see
 #     docs/engram-cloud/quickstart.md#tls-on-a-real-server).
 {$ENGRAM_CLOUD_TLS_HOSTS} {
 	tls {$ENGRAM_CLOUD_TLS}

@@ -65,8 +65,11 @@ services:
     # image — see docker-compose.cloud.yml), set ENGRAM_CLOUD_AUTOSYNC=1 and
     # ENGRAM_CLOUD_SERVER in .env (ENGRAM_CLOUD_TOKEN is optional — see
     # docker/http/env.example). For a cloud stack on this same host, point
-    # ENGRAM_CLOUD_SERVER at http://host.docker.internal:18080 (the
-    # extra_hosts entry above makes that hostname resolve); for a remote
+    # ENGRAM_CLOUD_SERVER at https://host.docker.internal:18443 (the cloud
+    # stack's `tls` profile — engram never sends a bearer over plaintext
+    # http; the extra_hosts entry above makes that hostname resolve, and
+    # docs/engram-http/README.md#cloud-mode covers the CA and bind address);
+    # for a remote
     # cloud, use its real URL and drop extra_hosts if you prefer. This file
     # never merges the cloud and http services — they stay two independent
     # images/compose stacks. See docs/engram-cloud/README.md.

@@ -917,7 +917,7 @@ The backfill is project-scoped, non-destructive, and idempotent: it inserts miss
 # docker-compose.cloud.yml includes defaults for browser-demo smoke usage:
 # ENGRAM_CLOUD_INSECURE_NO_AUTH=1
 # ENGRAM_CLOUD_ALLOWED_PROJECTS=smoke-project
-docker compose -f docker-compose.cloud.yml up -d
+docker compose -p engram-cloud -f docker-compose.cloud.yml up -d
 
 # source-run flow (without compose): set BOTH token + allowlist before startup
 # ENGRAM_DATABASE_URL="postgres://engram:engram_dev@127.0.0.1:5433/engram_cloud?sslmode=disable" \

@@ -1295,7 +1295,7 @@ func cmdMCP(cfg store.Config) {
 			// now with a clear message instead of a 503 on the first request.
 			if _, err := remote.RequireHTTPSRemote(serverURL); err != nil {
 				stopAutosync()
-				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 in HTTP transport mode requires an HTTPS ENGRAM_CLOUD_SERVER (every MCP request carries a bearer engram refuses to send over plaintext HTTP): %w — put a TLS reverse proxy in front of your cloud server (e.g. `docker compose -f docker-compose.cloud.yml --profile tls up`) or set ENGRAM_CLOUD_SERVER to an https:// URL", err))
+				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 in HTTP transport mode requires an HTTPS ENGRAM_CLOUD_SERVER (every MCP request carries a bearer engram refuses to send over plaintext HTTP): %w — put a TLS reverse proxy in front of your cloud server (e.g. `docker compose -p engram-cloud -f docker-compose.cloud.yml --profile tls up`) or set ENGRAM_CLOUD_SERVER to an https:// URL", err))
 			}
 			if setSyncToken == nil && strings.TrimSpace(cc.Token) != "" {
 				// A token is configured but autosync still failed to start

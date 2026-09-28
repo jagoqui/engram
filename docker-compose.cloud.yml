@@ -1,16 +1,20 @@
 # Engram Cloud — local smoke / dev stack. Defaults below reproduce the
 # original insecure dev smoke profile exactly, so a plain
-# `docker compose -f docker-compose.cloud.yml up` still behaves the same as
+# `docker compose -p engram-cloud -f docker-compose.cloud.yml up` still behaves the same as
 # before these vars existed. Every value is overridable from an env file so
 # this same compose file can run on a real server. See docker/cloud/env.example
 # and docs/engram-cloud/quickstart.md.
 #
 # Usage (dev smoke, unchanged):
-#   docker compose -f docker-compose.cloud.yml up -d
+#   docker compose -p engram-cloud -f docker-compose.cloud.yml up -d
 #
 # Usage (configured, e.g. production-leaning):
 #   cp docker/cloud/env.example .env.cloud
-#   docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d
+#   docker compose -p engram-cloud --env-file .env.cloud -f docker-compose.cloud.yml up -d
+#
+# Always pass `-p engram-cloud`: the containers use fixed container_name
+# values, and the default project name (this directory) would collide with
+# the engram-http stack's project. Add `--profile tls` for the TLS proxy.
 #
 # .env.cloud is a separate file from the engram-http stack's root `.env` so
 # the two stacks' secrets never collide when both run from this directory.
@@ -19,6 +23,10 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: engram-cloud-postgres
+    # POSTGRES_USER/PASSWORD/DB only take effect on a FRESH engram-cloud-pg
+    # volume (initdb runs once). Changing them later does not alter an
+    # existing database; reset the password inside Postgres or recreate the
+    # volume (destroys data).
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-engram}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-engram_dev}
@@ -42,8 +50,14 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # The default URL interpolates POSTGRES_PASSWORD verbatim, so it must
+      # be URL-safe (`openssl rand -hex 32` is); otherwise set
+      # ENGRAM_DATABASE_URL explicitly with a percent-encoded password.
       ENGRAM_DATABASE_URL: ${ENGRAM_DATABASE_URL:-postgres://${POSTGRES_USER:-engram}:${POSTGRES_PASSWORD:-engram_dev}@postgres:5432/${POSTGRES_DB:-engram_cloud}?sslmode=disable}
       ENGRAM_JWT_SECRET: ${ENGRAM_JWT_SECRET:-engram-dev-jwt-secret-for-local-smoke-1234}
+      # Only exactly "0" enables authentication. Unset AND empty
+      # (`ENGRAM_CLOUD_INSECURE_NO_AUTH=`) both fall back to "1" (insecure
+      # dev mode) because of `:-`; always set it explicitly on a server.
       ENGRAM_CLOUD_INSECURE_NO_AUTH: ${ENGRAM_CLOUD_INSECURE_NO_AUTH:-1}
       ENGRAM_CLOUD_ALLOWED_PROJECTS: ${ENGRAM_CLOUD_ALLOWED_PROJECTS:-smoke-project}
       ENGRAM_CLOUD_HOST: 0.0.0.0
@@ -70,7 +84,7 @@ services:
   # cloud mode needs this to talk to `cloud` — either locally (Caddy's own
   # CA, "tls internal") or on a real server (ACME/Let's Encrypt, "tls
   # <email>"). Off by default: only starts with `--profile tls`, so a plain
-  # `docker compose -f docker-compose.cloud.yml up` is unaffected. See
+  # `docker compose -p engram-cloud -f docker-compose.cloud.yml up` is unaffected. See
   # docs/engram-cloud/quickstart.md#local-https-with-the-tls-profile.
   caddy:
     image: caddy:2-alpine
@@ -85,8 +99,15 @@ services:
       - ./docker/cloud/Caddyfile:/etc/caddy/Caddyfile:ro
       - engram-cloud-caddy-data:/data
       - engram-cloud-caddy-config:/config
+    # 443 serves HTTPS (TLS-ALPN-01 needs only this one). The HTTP port
+    # serves the http->https redirect and is required for ACME HTTP-01 on a
+    # server: set ENGRAM_CLOUD_TLS_PORT=443 and ENGRAM_CLOUD_TLS_HTTP_PORT=80.
+    # BIND_ADDR: 127.0.0.1 (default) is host-only; 172.17.0.1 (Docker bridge
+    # gateway) is reachable from containers via host.docker.internal but not
+    # from the LAN; 0.0.0.0 exposes it to every interface (firewall it).
     ports:
       - "${ENGRAM_CLOUD_TLS_BIND_ADDR:-127.0.0.1}:${ENGRAM_CLOUD_TLS_PORT:-18443}:443"
+      - "${ENGRAM_CLOUD_TLS_BIND_ADDR:-127.0.0.1}:${ENGRAM_CLOUD_TLS_HTTP_PORT:-18088}:80"
 
 volumes:
   engram-cloud-pg:

@@ -22,7 +22,7 @@ If you want a working cloud setup fast, use the local smoke path first:
 4. Run explicit cloud sync
 
 ```bash
-docker compose -f docker-compose.cloud.yml up -d
+docker compose -p engram-cloud -f docker-compose.cloud.yml up -d
 engram cloud config --server http://127.0.0.1:18080
 engram cloud enroll smoke-project
 engram sync --cloud --project smoke-project

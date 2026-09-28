@@ -57,7 +57,7 @@ docker compose -f docker-compose.http.yml down -v   # stop and drop the volume
 | `ENGRAM_MCP_HTTP_ALLOWED_HOSTS` | Comma-separated `Host` allowlist beyond loopback. Checked only when the request has no bound secret (no `ENGRAM_MCP_HTTP_TOKEN`, and in cloud mode only for a bearer-less request falling back to the `.env` token). |
 | `ENGRAM_DATA_DIR` | Data directory inside the container. Already `/data`, matching the compose volume mount — only change together with the volume target. |
 | `ENGRAM_CLOUD_AUTOSYNC` | Set to `1` to enable cloud mode (see [Auth modes](#auth-modes)). |
-| `ENGRAM_CLOUD_SERVER` | Engram Cloud base URL. Must be `https://` in cloud mode, e.g. `https://cloud.example.com` or `https://host.docker.internal:18443` (local `tls` profile). |
+| `ENGRAM_CLOUD_SERVER` | Engram Cloud base URL. Must be `https://` in cloud mode, e.g. `https://cloud.example.com` or `https://host.docker.internal:18443` (local `tls` profile, host-only curl: `https://172.17.0.1:18443`). |
 | `ENGRAM_CLOUD_TOKEN` | Optional. Fallback/owner cloud token used when a request carries no bearer of its own. Omit it entirely for bearer-only cloud mode — the first request's `Authorization: Bearer` pins the owner and starts sync. |
 
 `ENGRAM_MCP_HTTP_TOKEN` and `ENGRAM_CLOUD_AUTOSYNC=1` are mutually exclusive: the `Authorization` header is either a static local token or an Engram Cloud bearer, never both. `engram` refuses to start if both are set.
@@ -92,7 +92,8 @@ To point this container at a `docker-compose.cloud.yml` stack on the same host, 
 
 ```bash
 # cloud stack, with the TLS proxy published where containers can reach it
-# (.env.cloud: ENGRAM_CLOUD_TLS_BIND_ADDR=0.0.0.0)
+# (.env.cloud: ENGRAM_CLOUD_TLS_BIND_ADDR=172.17.0.1 — the Docker bridge
+# gateway host.docker.internal resolves to; not reachable from the LAN)
 docker compose -p engram-cloud --env-file .env.cloud --profile tls -f docker-compose.cloud.yml up -d
 
 # trust Caddy's local CA inside engram-http

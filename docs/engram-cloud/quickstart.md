@@ -13,7 +13,7 @@ This page gives one recommended path first. Advanced/authenticated mode follows 
 ### 1) Start cloud runtime + Postgres
 
 ```bash
-docker compose -f docker-compose.cloud.yml up -d
+docker compose -p engram-cloud -f docker-compose.cloud.yml up -d
 ```
 
 `docker-compose.cloud.yml` defaults with no env file:
@@ -28,7 +28,7 @@ the engram-http stack's root `.env` so the two never collide:
 ```bash
 cp docker/cloud/env.example .env.cloud
 # edit .env.cloud for your deployment
-docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d
+docker compose -p engram-cloud --env-file .env.cloud -f docker-compose.cloud.yml up -d
 ```
 
 To enable managed (bootstrap-issued) user tokens instead of the legacy
@@ -43,6 +43,17 @@ docker exec -it engram-cloud engram cloud bootstrap admin \
 ```
 
 See [Managed Users and CLI Bootstrap](#managed-users-and-cli-bootstrap) below.
+
+Notes on `.env.cloud`:
+- Always run compose with `-p engram-cloud`; the containers use fixed names
+  and the default project name would collide with the engram-http stack.
+- `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` only apply on a fresh
+  Postgres volume; changing them later does not alter an existing database.
+- `POSTGRES_PASSWORD` is interpolated raw into the default
+  `ENGRAM_DATABASE_URL`, so it must be URL-safe (`openssl rand -hex 32` is),
+  or set `ENGRAM_DATABASE_URL` explicitly.
+- Only `ENGRAM_CLOUD_INSECURE_NO_AUTH=0` enables authentication; unset or
+  empty falls back to `1` (insecure dev mode).
 
 ### Local HTTPS with the `tls` profile
 
@@ -59,15 +70,22 @@ curl --cacert <(docker exec engram-cloud-caddy cat /data/caddy/pki/authorities/l
 Locally Caddy uses its own CA (`ENGRAM_CLOUD_TLS=internal`) for
 `ENGRAM_CLOUD_TLS_HOSTS` (default `localhost, host.docker.internal`),
 published on `ENGRAM_CLOUD_TLS_BIND_ADDR:ENGRAM_CLOUD_TLS_PORT` (default
-`127.0.0.1:18443`; use `0.0.0.0` so other containers can reach it). Export
-the CA for engram-http as described in `docker/http/ca/README.md`.
+`127.0.0.1:18443`). For an engram-http container on the same host set
+`ENGRAM_CLOUD_TLS_BIND_ADDR=172.17.0.1` (the Docker bridge gateway that
+`host.docker.internal` resolves to): containers reach it, the LAN cannot.
+From the host use `https://172.17.0.1:18443`, or keep using the dashboard on
+plain `http://127.0.0.1:18080`. `0.0.0.0` exposes the proxy on every
+interface; only use it behind a firewall. Export the CA for engram-http as
+described in `docker/http/ca/README.md` (recreating the Caddy data volume
+rotates that CA, so re-export it and recreate engram-http).
 
 ### TLS on a real server
 
 Set `ENGRAM_CLOUD_TLS` to your email (Let's Encrypt), `ENGRAM_CLOUD_TLS_HOSTS`
-to your domain, `ENGRAM_CLOUD_TLS_BIND_ADDR=0.0.0.0` and
-`ENGRAM_CLOUD_TLS_PORT=443`. The domain must resolve to the server and port
-443 must be publicly reachable for certificate issuance. Keep
+to your domain, `ENGRAM_CLOUD_TLS_BIND_ADDR=0.0.0.0`,
+`ENGRAM_CLOUD_TLS_PORT=443` and `ENGRAM_CLOUD_TLS_HTTP_PORT=80`. The domain
+must resolve to the server; 443 must be publicly reachable for certificate
+issuance (TLS-ALPN-01) and 80 as well for HTTP-01. Keep
 `ENGRAM_CLOUD_BIND_ADDR=127.0.0.1` so the plaintext port is not exposed.
 
 ### 2) Configure CLI cloud endpoint
