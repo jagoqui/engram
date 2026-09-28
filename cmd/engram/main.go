@@ -1145,8 +1145,10 @@ func cmdMCP(cfg store.Config) {
 
 	if transportFlag == "http" {
 		httpCfg := mcp.HTTPTransportConfig{
-			ListenAddr: listenFlag,
-			LocalToken: strings.TrimSpace(os.Getenv(mcp.EnvHTTPToken)),
+			ListenAddr:     listenFlag,
+			LocalToken:     strings.TrimSpace(os.Getenv(mcp.EnvHTTPToken)),
+			AllowedOrigins: strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedOrigins)),
+			AllowedHosts:   strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedHosts)),
 		}
 		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {
 			stopAutosync()
@@ -3750,6 +3752,8 @@ Commands:
                        --listen ADDR   Bind address for --transport http (default 127.0.0.1:7438).
                                        Also accepted as ENGRAM_MCP_HTTP_ADDR=ADDR env var (flag wins).
                                        Set ENGRAM_MCP_HTTP_TOKEN to require a matching bearer token.
+                                       ENGRAM_MCP_HTTP_ALLOWED_ORIGINS: comma-separated Origin allowlist (default: reject any Origin).
+                                       ENGRAM_MCP_HTTP_ALLOWED_HOSTS: comma-separated Host allowlist beyond loopback (checked only without a token).
   tui                Launch interactive terminal UI
   test [suite] [--quick] [--json]
                      Run isolated local reliability and performance self-tests

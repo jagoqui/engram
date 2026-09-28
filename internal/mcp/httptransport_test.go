@@ -186,6 +186,46 @@ func TestIsLoopbackAddr(t *testing.T) {
 	}
 }
 
+// TestWithOriginHostGuard covers cross-origin and DNS-rebinding rejection.
+func TestWithOriginHostGuard(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    HTTPTransportConfig
+		origin string
+		host   string // empty keeps httptest's own loopback Host
+		want   int
+	}{
+		{"foreign origin rejected", HTTPTransportConfig{}, "https://evil.example", "", http.StatusForbidden},
+		{"allowlisted origin passes", HTTPTransportConfig{AllowedOrigins: "https://good.example"}, "https://good.example", "", http.StatusOK},
+		{"no token, foreign host rejected", HTTPTransportConfig{}, "", "evil.example:7438", http.StatusForbidden},
+		{"no token, loopback host passes", HTTPTransportConfig{}, "", "", http.StatusOK},
+		{"no token, allowlisted host passes", HTTPTransportConfig{AllowedHosts: "evil.example"}, "", "evil.example:7438", http.StatusOK},
+		{"token configured skips host check", HTTPTransportConfig{LocalToken: "secret"}, "", "evil.example:7438", http.StatusOK},
+	}
+	for _, tt := range tests {
+		srv := httptest.NewServer(withOriginHostGuard(withLocalBearerGuard(okHandler(), tt.cfg.LocalToken), tt.cfg))
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+		if tt.origin != "" {
+			req.Header.Set("Origin", tt.origin)
+		}
+		if tt.host != "" {
+			req.Host = tt.host
+		}
+		if tt.cfg.LocalToken != "" {
+			req.Header.Set("Authorization", "Bearer "+tt.cfg.LocalToken)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%s: POST: %v", tt.name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Fatalf("%s: status = %d; want %d", tt.name, resp.StatusCode, tt.want)
+		}
+	}
+}
+
 // ─── GET /health via the full handler ─────────────────────────────────────
 
 func TestNewHTTPHandler_Health(t *testing.T) {
@@ -282,5 +322,49 @@ func TestHTTPTransport_SaveThenSearchUsesHeaderProject(t *testing.T) {
 	}
 	if len(obs) == 0 {
 		t.Fatal("expected the observation to be stored under the header project")
+	}
+}
+
+// TestHTTPTransport_SaveWithoutProjectSignalErrorsAndPersistsNothing covers mem_save over HTTP with no project signal.
+func TestHTTPTransport_SaveWithoutProjectSignalErrorsAndPersistsNothing(t *testing.T) {
+	s := newMCPTestStore(t)
+	mcpSrv := NewServerWithConfig(s, MCPConfig{}, nil)
+	handler := NewHTTPHandler(mcpSrv, HTTPTransportConfig{})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	c, err := mcpclient.NewStreamableHttpClient(srv.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("new streamable http client: %v", err)
+	}
+	defer c.Close()
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	initReq := mcppkg.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcppkg.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcppkg.Implementation{Name: "engram-http-e2e-test", Version: "0.0.0"}
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	saveReq := mcppkg.CallToolRequest{}
+	saveReq.Params.Name = "mem_save"
+	saveReq.Params.Arguments = map[string]any{
+		"title":   "should never persist",
+		"content": "no project header, no default project, no ENGRAM_PROJECT",
+	}
+	saveRes, err := c.CallTool(ctx, saveReq)
+	if err != nil {
+		t.Fatalf("call mem_save: %v", err)
+	}
+	text, ok := mcppkg.AsTextContent(saveRes.Content[0])
+	if !saveRes.IsError || !ok || !strings.Contains(text.Text, "X-Engram-Subproject") {
+		t.Fatalf("expected mem_save to fail closed mentioning X-Engram-Subproject, got: %+v", saveRes.Content)
+	}
+	if count, err := s.CountObservationsForProject(""); err != nil || count != 0 {
+		t.Fatalf("expected no observation persisted under an empty project, got count=%d err=%v", count, err)
 	}
 }

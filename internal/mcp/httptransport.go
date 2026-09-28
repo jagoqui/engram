@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ const (
 	// Engram Cloud instead.
 	EnvHTTPToken = "ENGRAM_MCP_HTTP_TOKEN"
 
+	// EnvHTTPAllowedOrigins is a comma-separated exact-match Origin allowlist; any Origin header is rejected unless listed here.
+	EnvHTTPAllowedOrigins = "ENGRAM_MCP_HTTP_ALLOWED_ORIGINS"
+
+	// EnvHTTPAllowedHosts is a comma-separated Host allowlist beyond loopback, checked only when EnvHTTPToken is unset (DNS-rebinding guard).
+	EnvHTTPAllowedHosts = "ENGRAM_MCP_HTTP_ALLOWED_HOSTS"
+
 	httpMCPEndpointPath = "/mcp"
 	httpHealthPath      = "/health"
 
@@ -51,6 +58,12 @@ type HTTPTransportConfig struct {
 	// token must match via constant-time comparison or the request is
 	// rejected with 401. Empty disables the local guard.
 	LocalToken string
+
+	// AllowedOrigins is the raw comma-separated ENGRAM_MCP_HTTP_ALLOWED_ORIGINS value.
+	AllowedOrigins string
+
+	// AllowedHosts is the raw comma-separated ENGRAM_MCP_HTTP_ALLOWED_HOSTS value, used only when LocalToken is empty.
+	AllowedHosts string
 }
 
 // ResolveHTTPListenAddr applies the documented precedence for the HTTP
@@ -80,7 +93,7 @@ func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Hand
 	mux.HandleFunc(httpHealthPath, handleHealth)
 	mux.Handle(httpMCPEndpointPath, streamable)
 
-	return withLocalBearerGuard(mux, cfg.LocalToken)
+	return withOriginHostGuard(withLocalBearerGuard(mux, cfg.LocalToken), cfg)
 }
 
 // ServeHTTP starts the streamable HTTP MCP transport and blocks until ctx is
@@ -207,4 +220,58 @@ func withLocalBearerGuard(next http.Handler, localToken string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withOriginHostGuard rejects DNS-rebinding/cross-origin requests with 403 before MCP dispatch; /health stays open.
+func withOriginHostGuard(next http.Handler, cfg HTTPTransportConfig) http.Handler {
+	allowedOrigins := parseCommaList(cfg.AllowedOrigins)
+	allowedHosts := parseCommaList(cfg.AllowedHosts)
+	hasToken := strings.TrimSpace(cfg.LocalToken) != ""
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == httpHealthPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && !slices.Contains(allowedOrigins, origin) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		// A configured token already defeats rebinding, so skip the Host check.
+		if !hasToken && !hostAllowed(r.Host, allowedHosts) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostAllowed reports whether hostHeader (with an optional port) is loopback or in allowed.
+func hostAllowed(hostHeader string, allowed []string) bool {
+	host := hostHeader
+	if h, _, err := net.SplitHostPort(hostHeader); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return slices.ContainsFunc(allowed, func(a string) bool { return strings.EqualFold(a, host) })
+}
+
+// parseCommaList splits a comma-separated env value into trimmed, non-empty entries.
+func parseCommaList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

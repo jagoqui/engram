@@ -18,6 +18,9 @@ endpoint `/mcp`, liveness at `/health`). Over HTTP, the per-request project come
 from the `X-Engram-Subproject` header (alias `X-Engram-Project`) instead of cwd
 detection — the server process's own working directory has no relationship to a
 remote client. Set `ENGRAM_MCP_HTTP_TOKEN` to require a matching bearer token;
+`ENGRAM_MCP_HTTP_ALLOWED_ORIGINS` allowlists exact browser `Origin` values (any
+Origin is rejected by default), and `ENGRAM_MCP_HTTP_ALLOWED_HOSTS` allowlists
+non-loopback `Host` values for DNS-rebinding protection when no token is set;
 container/Docker deployment specifics live in the setup docs. It has tool profiles:
 
 | Profile | Use |

@@ -2828,12 +2828,17 @@ func resolveWriteProjectWithChoiceAndProcessOverride(ctx context.Context, s *sto
 	if strings.TrimSpace(projectChoice) == "" {
 		return resolveWriteProjectWithProcessOverride(ctx, s, defaultProject, false)
 	}
-	return resolveWriteProjectWithChoice(ctx, projectChoice, reason, validateToken)
+	return resolveWriteProjectWithChoice(ctx, s, projectChoice, reason, validateToken)
 }
 
 // resolveWriteProjectWithChoice preserves normal write resolution authority and
 // only uses an explicit project choice as a recovery path from ErrAmbiguousProject.
-func resolveWriteProjectWithChoice(ctx context.Context, projectChoice, reason string, validateToken ambiguousRecoveryTokenValidator) (projectpkg.DetectionResult, error) {
+func resolveWriteProjectWithChoice(ctx context.Context, s *store.Store, projectChoice, reason string, validateToken ambiguousRecoveryTokenValidator) (projectpkg.DetectionResult, error) {
+	if isHTTPTransport(ctx) {
+		// HTTP never signals cwd ambiguity, so resolve like reads instead:
+		// explicit choice > request header > ErrHTTPProjectRequired.
+		return resolveMCPProjectWithPolicy(ctx, s, projectChoice, "", false)
+	}
 	res, err := resolveWriteProject(ctx)
 	if err == nil {
 		// Non-ambiguous config/git/autodetect remains authoritative. Ignore any
@@ -2989,7 +2994,7 @@ func resolveSaveWriteProject(ctx context.Context, s *store.Store, projectChoice 
 			}
 			if errors.Is(cwdErr, projectpkg.ErrAmbiguousProject) {
 				if trimmedReason == projectpkg.SourceUserSelectedAfterAmbiguousProject {
-					return resolveWriteProjectWithChoice(ctx, projectChoice, reason, validateToken)
+					return resolveWriteProjectWithChoice(ctx, s, projectChoice, reason, validateToken)
 				}
 				return cwdRes, cwdErr
 			}
@@ -3017,7 +3022,7 @@ func resolveSaveWriteProject(ctx context.Context, s *store.Store, projectChoice 
 	}
 
 	if trimmedReason == projectpkg.SourceUserSelectedAfterAmbiguousProject && trimmedProjectChoice != "" {
-		res, err := resolveWriteProjectWithChoice(ctx, projectChoice, reason, validateToken)
+		res, err := resolveWriteProjectWithChoice(ctx, s, projectChoice, reason, validateToken)
 		if err != nil {
 			return res, err
 		}
@@ -3041,7 +3046,14 @@ func resolveSaveWriteProject(ctx context.Context, s *store.Store, projectChoice 
 		}, nil
 	}
 
-	return resolveWriteProject(ctx)
+	res, err := resolveWriteProject(ctx)
+	if err != nil {
+		return res, err
+	}
+	if isHTTPTransport(ctx) && strings.TrimSpace(res.Project) == "" {
+		return res, ErrHTTPProjectRequired // fail closed instead of an empty-project write
+	}
+	return res, nil
 }
 
 func explicitWriteProjectCollision(trimmedRawProject, normalizedProject, sessionProject string, cwdRes projectpkg.DetectionResult) *normalizedProjectCollisionError {
