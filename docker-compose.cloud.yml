@@ -64,5 +64,31 @@ services:
       - "${ENGRAM_CLOUD_BIND_ADDR:-127.0.0.1}:${ENGRAM_CLOUD_PUBLISHED_PORT:-18080}:18080"
     command: ["cloud", "serve"]
 
+  # Optional TLS reverse proxy in front of `cloud` (T7). engram's cloud
+  # client refuses to send a bearer token over plaintext HTTP
+  # (internal/cloud/remote/transport.go), so an engram-http container in
+  # cloud mode needs this to talk to `cloud` — either locally (Caddy's own
+  # CA, "tls internal") or on a real server (ACME/Let's Encrypt, "tls
+  # <email>"). Off by default: only starts with `--profile tls`, so a plain
+  # `docker compose -f docker-compose.cloud.yml up` is unaffected. See
+  # docs/engram-cloud/quickstart.md#local-https-with-the-tls-profile.
+  caddy:
+    image: caddy:2-alpine
+    container_name: engram-cloud-caddy
+    profiles: ["tls"]
+    depends_on:
+      - cloud
+    environment:
+      ENGRAM_CLOUD_TLS_HOSTS: ${ENGRAM_CLOUD_TLS_HOSTS:-localhost, host.docker.internal}
+      ENGRAM_CLOUD_TLS: ${ENGRAM_CLOUD_TLS:-internal}
+    volumes:
+      - ./docker/cloud/Caddyfile:/etc/caddy/Caddyfile:ro
+      - engram-cloud-caddy-data:/data
+      - engram-cloud-caddy-config:/config
+    ports:
+      - "${ENGRAM_CLOUD_TLS_BIND_ADDR:-127.0.0.1}:${ENGRAM_CLOUD_TLS_PORT:-18443}:443"
+
 volumes:
   engram-cloud-pg:
+  engram-cloud-caddy-data:
+  engram-cloud-caddy-config:

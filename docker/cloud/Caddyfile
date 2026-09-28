@@ -1,0 +1,20 @@
+# Caddy config for the optional `tls` compose profile in
+# docker-compose.cloud.yml. Terminates TLS in front of the `cloud` service
+# and passes every request (including the Authorization header — Caddy's
+# reverse_proxy forwards headers by default) straight through to it.
+#
+# ENGRAM_CLOUD_TLS_HOSTS: comma-separated site addresses Caddy answers for.
+#   Local default: "localhost, host.docker.internal" — reachable from the
+#   engram-http container over the Docker Desktop / Docker Engine gateway.
+# ENGRAM_CLOUD_TLS: the TLS issuer.
+#   - "internal" (default): Caddy's own local CA, no public trust needed —
+#     for local/dev use, export the CA root once (see
+#     docs/engram-cloud/quickstart.md) so engram-http trusts it.
+#   - an email address: real ACME (Let's Encrypt) issuance for a publicly
+#     reachable server — set ENGRAM_CLOUD_TLS_HOSTS to the real domain and
+#     make sure ports 80/443 are reachable from the internet (see
+#     docs/engram-cloud/quickstart.md#tls-on-a-real-server).
+{$ENGRAM_CLOUD_TLS_HOSTS} {
+	tls {$ENGRAM_CLOUD_TLS}
+	reverse_proxy cloud:18080
+}

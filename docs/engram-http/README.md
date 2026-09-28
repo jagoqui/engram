@@ -57,7 +57,7 @@ docker compose -f docker-compose.http.yml down -v   # stop and drop the volume
 | `ENGRAM_MCP_HTTP_ALLOWED_HOSTS` | Comma-separated `Host` allowlist beyond loopback. Checked only when the request has no bound secret (no `ENGRAM_MCP_HTTP_TOKEN`, and in cloud mode only for a bearer-less request falling back to the `.env` token). |
 | `ENGRAM_DATA_DIR` | Data directory inside the container. Already `/data`, matching the compose volume mount — only change together with the volume target. |
 | `ENGRAM_CLOUD_AUTOSYNC` | Set to `1` to enable cloud mode (see [Auth modes](#auth-modes)). |
-| `ENGRAM_CLOUD_SERVER` | Engram Cloud base URL, e.g. `http://host.docker.internal:18080`. |
+| `ENGRAM_CLOUD_SERVER` | Engram Cloud base URL. Must be `https://` in cloud mode, e.g. `https://cloud.example.com` or `https://host.docker.internal:18443` (local `tls` profile). |
 | `ENGRAM_CLOUD_TOKEN` | Optional. Fallback/owner cloud token used when a request carries no bearer of its own. Omit it entirely for bearer-only cloud mode — the first request's `Authorization: Bearer` pins the owner and starts sync. |
 
 `ENGRAM_MCP_HTTP_TOKEN` and `ENGRAM_CLOUD_AUTOSYNC=1` are mutually exclusive: the `Authorization` header is either a static local token or an Engram Cloud bearer, never both. `engram` refuses to start if both are set.
@@ -86,16 +86,27 @@ Either way, every request's bearer is validated against the cloud server's `GET 
 
 A validated request bearer also becomes the token autosync uses for outbound sync calls for the rest of the process lifetime ("last validated token wins"), and its project is enrolled for cloud sync automatically. `ENGRAM_CLOUD_SERVER` is always required in cloud mode — a missing or invalid server URL is a fatal startup error either way.
 
-To point this container at a locally running `docker-compose.cloud.yml` stack:
+`ENGRAM_CLOUD_SERVER` must be `https://`: engram never sends a bearer over plaintext HTTP, so HTTP cloud mode refuses to start with an `http://` URL.
+
+To point this container at a `docker-compose.cloud.yml` stack on the same host, start the cloud with its optional Caddy TLS proxy and trust its local CA:
 
 ```bash
+# cloud stack, with the TLS proxy published where containers can reach it
+# (.env.cloud: ENGRAM_CLOUD_TLS_BIND_ADDR=0.0.0.0)
+docker compose -p engram-cloud --env-file .env.cloud --profile tls -f docker-compose.cloud.yml up -d
+
+# trust Caddy's local CA inside engram-http
+docker cp engram-cloud-caddy:/data/caddy/pki/authorities/local/root.crt docker/http/ca/engram-cloud-local-ca.crt
+chmod 644 docker/http/ca/engram-cloud-local-ca.crt
+
 # in .env
 ENGRAM_CLOUD_AUTOSYNC=1
-ENGRAM_CLOUD_SERVER=http://host.docker.internal:18080
-ENGRAM_CLOUD_TOKEN=<your cloud token>
+ENGRAM_CLOUD_SERVER=https://host.docker.internal:18443
+
+docker compose -f docker-compose.http.yml up -d --force-recreate
 ```
 
-`docker-compose.http.yml` already maps `host.docker.internal` to the host gateway (`extra_hosts`), so no compose edit is needed for this — it's harmless when unused. For a remote cloud instead, set `ENGRAM_CLOUD_SERVER` to its real HTTPS URL.
+`docker-compose.http.yml` maps `host.docker.internal` to the host gateway and mounts `docker/http/ca` into `SSL_CERT_DIR`, so no compose edit is needed. For a remote cloud with a publicly trusted certificate, set `ENGRAM_CLOUD_SERVER` to its real HTTPS URL and leave `docker/http/ca` empty.
 
 Cloud is a **separate image and compose file** ([docker-compose.cloud.yml](../../docker-compose.cloud.yml)) — this file never merges the two services. Bring up cloud first, then engram-http pointed at it. See [Engram Cloud](../engram-cloud/README.md).
 
@@ -116,7 +127,7 @@ docker compose -f docker-compose.http.yml up -d
 - **Auth**: set `ENGRAM_MCP_HTTP_TOKEN` (local-only mode) or configure cloud mode (see [Auth modes](#auth-modes)) before exposing the port off-host.
 - **Allowed hosts/origins**: once exposed, set `ENGRAM_MCP_HTTP_ALLOWED_ORIGINS` and/or `ENGRAM_MCP_HTTP_ALLOWED_HOSTS` to your client's actual origin/host — see [Security](#security).
 - **TLS**: this image serves plain HTTP only. Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik) in front for any internet-reachable deployment, and point `ENGRAM_REMOTE_URL` in the client config at the proxy's HTTPS URL.
-- **Connecting to a remote cloud**: set `ENGRAM_CLOUD_SERVER` to the cloud instance's real URL (`https://cloud.example.com`, or `http://host.docker.internal:18080` for a cloud stack on the same host — see [Cloud mode](#cloud-mode)). `ENGRAM_CLOUD_TOKEN` stays optional either way (bearer-only mode).
+- **Connecting to a remote cloud**: set `ENGRAM_CLOUD_SERVER` to the cloud instance's real URL (`https://cloud.example.com`, or `https://host.docker.internal:18443` for a cloud stack on the same host with the `tls` profile — see [Cloud mode](#cloud-mode)). `ENGRAM_CLOUD_TOKEN` stays optional either way (bearer-only mode).
 
 ---
 

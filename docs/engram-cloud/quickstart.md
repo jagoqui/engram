@@ -44,6 +44,32 @@ docker exec -it engram-cloud engram cloud bootstrap admin \
 
 See [Managed Users and CLI Bootstrap](#managed-users-and-cli-bootstrap) below.
 
+### Local HTTPS with the `tls` profile
+
+engram clients never send a bearer token over plaintext HTTP. To use tokens
+against this stack (for example from an engram-http container), start the
+optional Caddy proxy:
+
+```bash
+docker compose -p engram-cloud --env-file .env.cloud --profile tls -f docker-compose.cloud.yml up -d
+curl --cacert <(docker exec engram-cloud-caddy cat /data/caddy/pki/authorities/local/root.crt) \
+  https://localhost:18443/health
+```
+
+Locally Caddy uses its own CA (`ENGRAM_CLOUD_TLS=internal`) for
+`ENGRAM_CLOUD_TLS_HOSTS` (default `localhost, host.docker.internal`),
+published on `ENGRAM_CLOUD_TLS_BIND_ADDR:ENGRAM_CLOUD_TLS_PORT` (default
+`127.0.0.1:18443`; use `0.0.0.0` so other containers can reach it). Export
+the CA for engram-http as described in `docker/http/ca/README.md`.
+
+### TLS on a real server
+
+Set `ENGRAM_CLOUD_TLS` to your email (Let's Encrypt), `ENGRAM_CLOUD_TLS_HOSTS`
+to your domain, `ENGRAM_CLOUD_TLS_BIND_ADDR=0.0.0.0` and
+`ENGRAM_CLOUD_TLS_PORT=443`. The domain must resolve to the server and port
+443 must be publicly reachable for certificate issuance. Keep
+`ENGRAM_CLOUD_BIND_ADDR=127.0.0.1` so the plaintext port is not exposed.
+
 ### 2) Configure CLI cloud endpoint
 
 ```bash

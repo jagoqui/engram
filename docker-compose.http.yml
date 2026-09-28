@@ -26,6 +26,10 @@ services:
     container_name: engram-http
     environment:
       ENGRAM_DATA_DIR: /data
+      # Trust the system roots plus any extra CA dropped into docker/http/ca
+      # (e.g. the local Caddy CA from docker-compose.cloud.yml's `tls`
+      # profile). Go honors a colon-separated SSL_CERT_DIR.
+      SSL_CERT_DIR: /etc/ssl/certs:/usr/local/share/engram-ca
     env_file:
       - path: .env
         required: false
@@ -40,6 +44,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - engram-http-data:/data
+      - ./docker/http/ca:/usr/local/share/engram-ca:ro
       # --- Adopt an existing engram data dir instead of the named volume ---
       # WARNING: never bind-mount a data dir a HOST `engram` process is also
       # using live. SQLite WAL -shm/-wal locking is unreliable across the

@@ -38,3 +38,7 @@ Thumbs.db
 engram-dev
 .atl/
 .release-notes-beta.md
+
+# Local CA certificates mounted into engram-http
+docker/http/ca/*.crt
+docker/http/ca/*.pem
