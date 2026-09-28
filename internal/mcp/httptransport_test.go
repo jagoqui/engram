@@ -368,6 +368,26 @@ func TestWithOriginHostGuard_CloudAuthSkipsHostCheck(t *testing.T) {
 	}
 }
 
+// A bearer-less request in cloud mode rides the .env fallback token, so it
+// carries no secret and must still pass the Host check.
+func TestWithOriginHostGuard_CloudAuthWithoutBearerKeepsHostCheck(t *testing.T) {
+	auth := &fakeCloudAuth{result: true}
+	cfg := HTTPTransportConfig{CloudAuth: auth}
+	srv := httptest.NewServer(withOriginHostGuard(withCloudBearerGuard(okHandler(), auth), cfg))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Host = "evil.example:7438"
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d; want 403 (no bearer means no secret defeats rebinding)", resp.StatusCode)
+	}
+}
+
 // ─── GET /health via the full handler ─────────────────────────────────────
 
 func TestNewHTTPHandler_Health(t *testing.T) {

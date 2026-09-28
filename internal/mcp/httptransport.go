@@ -300,11 +300,11 @@ func withCloudBearerGuard(next http.Handler, auth CloudBearerAuthenticator) http
 func withOriginHostGuard(next http.Handler, cfg HTTPTransportConfig) http.Handler {
 	allowedOrigins := parseCommaList(cfg.AllowedOrigins)
 	allowedHosts := parseCommaList(cfg.AllowedHosts)
-	// A configured LocalToken or a CloudAuth already requires a bearer
-	// secret to get through, which defeats rebinding just as well as
-	// LocalToken alone — so the Host allowlist check below is skipped for
-	// either.
-	hasToken := strings.TrimSpace(cfg.LocalToken) != "" || cfg.CloudAuth != nil
+	// A configured LocalToken requires a bearer secret on every request,
+	// which defeats rebinding, so the Host allowlist check is skipped. In
+	// cloud mode only requests that carry their own bearer skip it: a
+	// bearer-less request falls back to the .env token and holds no secret.
+	hasToken := strings.TrimSpace(cfg.LocalToken) != ""
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == httpHealthPath {
@@ -315,8 +315,8 @@ func withOriginHostGuard(next http.Handler, cfg HTTPTransportConfig) http.Handle
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		// A configured token already defeats rebinding, so skip the Host check.
-		if !hasToken && !hostAllowed(r.Host, allowedHosts) {
+		secretBound := hasToken || (cfg.CloudAuth != nil && bearerToken(r) != "")
+		if !secretBound && !hostAllowed(r.Host, allowedHosts) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
