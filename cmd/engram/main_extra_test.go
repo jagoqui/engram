@@ -632,7 +632,7 @@ func TestTryStartAutosyncReturnsStopFn(t *testing.T) {
 	}
 	defer func() { newAutosyncManager = oldNewAutosyncManager }()
 
-	_, stopFn := tryStartAutosync(ctx, s, cfg)
+	_, stopFn, _ := tryStartAutosync(ctx, s, cfg)
 	if stopFn == nil {
 		t.Fatal("expected tryStartAutosync to return a non-nil stop function when autosync is enabled")
 	}

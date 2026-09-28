@@ -41,6 +41,12 @@ const (
 	httpMCPEndpointPath = "/mcp"
 	httpHealthPath      = "/health"
 
+	// httpReadHeaderTimeout/httpIdleTimeout bound how long the HTTP server
+	// waits on a slow client's headers or an idle keep-alive connection
+	// (R4-no-server-timeouts).
+	httpReadHeaderTimeout = 10 * time.Second
+	httpIdleTimeout       = 120 * time.Second
+
 	headerSubproject    = "X-Engram-Subproject"
 	headerProjectAlias  = "X-Engram-Project"
 	headerAuthorization = "Authorization"
@@ -64,6 +70,30 @@ type HTTPTransportConfig struct {
 
 	// AllowedHosts is the raw comma-separated ENGRAM_MCP_HTTP_ALLOWED_HOSTS value, used only when LocalToken is empty.
 	AllowedHosts string
+
+	// CloudAuth, when non-nil, replaces the static LocalToken guard for the
+	// /mcp endpoint with per-request Engram Cloud bearer validation (T2).
+	// The caller (cmd/engram) is responsible for enforcing that LocalToken
+	// and CloudAuth are never both configured; this package deterministically
+	// prefers CloudAuth when both are set.
+	CloudAuth CloudBearerAuthenticator
+}
+
+// CloudBearerAuthenticator lets the streamable HTTP transport delegate all
+// bearer-token handling for cloud mode to an Engram Cloud-aware caller
+// (cmd/engram), so this package never imports internal/cloud/* directly —
+// background/cloud orchestration stays out of the transport layer per
+// engram-architecture-guardrails. HTTPTransportConfig.CloudAuth carries the
+// implementation.
+type CloudBearerAuthenticator interface {
+	// Authenticate validates the request's raw bearer token (empty when the
+	// request sent none) for project (empty when the request sent no
+	// project header), and reports the outcome:
+	//   - (true, nil): allow the request through.
+	//   - (false, nil): reject with 401 (missing or invalid credentials).
+	//   - (false, err): reject with 503 (cloud unreachable) — err is safe to
+	//     log; implementations must never let it echo the raw token.
+	Authenticate(ctx context.Context, token, project string) (bool, error)
 }
 
 // ResolveHTTPListenAddr applies the documented precedence for the HTTP
@@ -93,7 +123,11 @@ func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Hand
 	mux.HandleFunc(httpHealthPath, handleHealth)
 	mux.Handle(httpMCPEndpointPath, streamable)
 
-	return withOriginHostGuard(withLocalBearerGuard(mux, cfg.LocalToken), cfg)
+	var guarded http.Handler = withLocalBearerGuard(mux, cfg.LocalToken)
+	if cfg.CloudAuth != nil {
+		guarded = withCloudBearerGuard(mux, cfg.CloudAuth)
+	}
+	return withOriginHostGuard(guarded, cfg)
 }
 
 // ServeHTTP starts the streamable HTTP MCP transport and blocks until ctx is
@@ -110,6 +144,10 @@ func ServeHTTP(ctx context.Context, mcpSrv *server.MCPServer, cfg HTTPTransportC
 	httpSrv := &http.Server{
 		Addr:    addr,
 		Handler: NewHTTPHandler(mcpSrv, cfg),
+		// R4-no-server-timeouts: bound slow/stalled clients instead of
+		// leaving connections open indefinitely.
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 
 	errCh := make(chan error, 1)
@@ -222,11 +260,51 @@ func withLocalBearerGuard(next http.Handler, localToken string) http.Handler {
 	})
 }
 
+// withCloudBearerGuard authenticates every /mcp request against Engram Cloud
+// through auth (bearer validation + fallback token + sync-token override +
+// project enrollment — see cmd/engram's cloudBearerAuthenticator), rejecting
+// with 401 (invalid/missing credentials) or 503 (cloud unreachable) before
+// MCP dispatch. /health stays open, matching withLocalBearerGuard. It builds
+// ctx via httpRequestContextFunc — the same per-request project/bearer
+// extraction the streamable transport itself uses — so auth sees exactly
+// what the eventual tool call will see.
+func withCloudBearerGuard(next http.Handler, auth CloudBearerAuthenticator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == httpHealthPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ctx := httpRequestContextFunc(r.Context(), r)
+		token, _ := RequestBearerToken(ctx)
+		project, _ := requestProjectFromContext(ctx)
+
+		ok, err := auth.Authenticate(ctx, token, project)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"cloud sync is unavailable"}`))
+			return
+		}
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // withOriginHostGuard rejects DNS-rebinding/cross-origin requests with 403 before MCP dispatch; /health stays open.
 func withOriginHostGuard(next http.Handler, cfg HTTPTransportConfig) http.Handler {
 	allowedOrigins := parseCommaList(cfg.AllowedOrigins)
 	allowedHosts := parseCommaList(cfg.AllowedHosts)
-	hasToken := strings.TrimSpace(cfg.LocalToken) != ""
+	// A configured LocalToken or a CloudAuth already requires a bearer
+	// secret to get through, which defeats rebinding just as well as
+	// LocalToken alone — so the Host allowlist check below is skipped for
+	// either.
+	hasToken := strings.TrimSpace(cfg.LocalToken) != "" || cfg.CloudAuth != nil
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == httpHealthPath {

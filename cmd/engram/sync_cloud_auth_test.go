@@ -162,7 +162,7 @@ func TestTryStartAutosyncUsesFileToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr, stopFn := tryStartAutosync(ctx, s, cfg)
+	mgr, stopFn, _ := tryStartAutosync(ctx, s, cfg)
 
 	// If the file-token fallback is missing, tryStartAutosync returns (nil, nil)
 	// because cc.Token is empty after resolveCloudRuntimeConfig ignores the file.

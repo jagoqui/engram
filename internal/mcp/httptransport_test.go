@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -223,6 +224,147 @@ func TestWithOriginHostGuard(t *testing.T) {
 		if resp.StatusCode != tt.want {
 			t.Fatalf("%s: status = %d; want %d", tt.name, resp.StatusCode, tt.want)
 		}
+	}
+}
+
+// ─── Cloud bearer guard (T2): delegates to a CloudBearerAuthenticator ─────
+
+// fakeCloudAuth is a test double for CloudBearerAuthenticator that records
+// the token/project it was called with and returns a scripted result.
+type fakeCloudAuth struct {
+	result   bool
+	err      error
+	called   bool
+	gotToken string
+	gotProj  string
+}
+
+func (f *fakeCloudAuth) Authenticate(_ context.Context, token, project string) (bool, error) {
+	f.called = true
+	f.gotToken = token
+	f.gotProj = project
+	return f.result, f.err
+}
+
+func TestWithCloudBearerGuard_ValidBearerPasses(t *testing.T) {
+	auth := &fakeCloudAuth{result: true}
+	srv := httptest.NewServer(withCloudBearerGuard(okHandler(), auth))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer cloud-token")
+	req.Header.Set("X-Engram-Subproject", "demo")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	if !auth.called || auth.gotToken != "cloud-token" || auth.gotProj != "demo" {
+		t.Fatalf("Authenticate called=%v token=%q project=%q; want called with cloud-token/demo", auth.called, auth.gotToken, auth.gotProj)
+	}
+}
+
+func TestWithCloudBearerGuard_InvalidBearerRejectedWith401(t *testing.T) {
+	auth := &fakeCloudAuth{result: false}
+	srv := httptest.NewServer(withCloudBearerGuard(okHandler(), auth))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d; want 401", resp.StatusCode)
+	}
+}
+
+func TestWithCloudBearerGuard_UnreachableCloudRejectedWith503(t *testing.T) {
+	auth := &fakeCloudAuth{err: errors.New("cloud unreachable")}
+	srv := httptest.NewServer(withCloudBearerGuard(okHandler(), auth))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d; want 503", resp.StatusCode)
+	}
+}
+
+func TestWithCloudBearerGuard_HealthExemptFromGuard(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/mcp", okHandler())
+	auth := &fakeCloudAuth{result: false}
+	srv := httptest.NewServer(withCloudBearerGuard(mux, auth))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/health status = %d; want 200 even when the cloud authenticator would reject", resp.StatusCode)
+	}
+	if auth.called {
+		t.Fatal("Authenticate must not be called for /health")
+	}
+}
+
+func TestNewHTTPHandler_CloudAuthTakesOverFromLocalToken(t *testing.T) {
+	s := newMCPTestStore(t)
+	mcpSrv := NewServerWithConfig(s, MCPConfig{}, nil)
+	auth := &fakeCloudAuth{result: true}
+	// LocalToken set alongside CloudAuth: the caller is responsible for
+	// enforcing mutual exclusivity at startup, but the transport itself
+	// must deterministically prefer CloudAuth so a request with no
+	// LocalToken-matching header still passes through cloud auth.
+	handler := NewHTTPHandler(mcpSrv, HTTPTransportConfig{LocalToken: "local-secret", CloudAuth: auth})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer not-the-local-secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatal("expected CloudAuth to be consulted instead of the LocalToken guard")
+	}
+	if !auth.called {
+		t.Fatal("expected CloudAuth.Authenticate to be called")
+	}
+}
+
+func TestWithOriginHostGuard_CloudAuthSkipsHostCheck(t *testing.T) {
+	auth := &fakeCloudAuth{result: true}
+	cfg := HTTPTransportConfig{CloudAuth: auth}
+	srv := httptest.NewServer(withOriginHostGuard(withCloudBearerGuard(okHandler(), auth), cfg))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Host = "evil.example:7438"
+	req.Header.Set("Authorization", "Bearer some-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (a configured CloudAuth already defeats rebinding, like LocalToken)", resp.StatusCode)
 	}
 }
 

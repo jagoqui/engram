@@ -903,7 +903,7 @@ func cmdServe(cfg store.Config) {
 	// handler can call mgrStop() before os.Exit, giving the manager time to
 	// release its sync lease.
 	fallback := storeSyncStatusProvider{store: s, defaultProject: resolveServeSyncStatusProject(), cfg: cfg}
-	mgr, mgrStop := tryStartAutosync(ctx, s, cfg)
+	mgr, mgrStop, _ := tryStartAutosync(ctx, s, cfg)
 	if mgr != nil {
 		srv.SetSyncStatus(&autosyncStatusAdapter{mgr: mgr, fallback: fallback})
 	} else {
@@ -998,16 +998,22 @@ func resolveServeSyncStatusProject() string {
 // Never fatal — autosync is optional.
 // BW7: Returns (status provider, stop func) so the caller can invoke stop
 // before os.Exit to ensure the Manager releases its sync lease.
-func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (autosyncStatusProvider, func()) {
+//
+// The third return value exposes the underlying MutationTransport's
+// SetToken, so `engram mcp --transport=http` in cloud mode can let a
+// per-request validated bearer override the sync token (T2 — "last
+// validated token wins"). It is nil whenever autosync did not start; only
+// the HTTP transport's cloud wiring consumes it, stdio/serve ignore it.
+func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (autosyncStatusProvider, func(), func(string)) {
 	// REQ-210: opt-in requires exact "1".
 	if strings.TrimSpace(os.Getenv("ENGRAM_CLOUD_AUTOSYNC")) != "1" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	cc, err := resolveCloudRuntimeConfig(cfg)
 	if err != nil {
 		log.Printf("[autosync] ERROR: cannot read cloud config: %v", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	token := strings.TrimSpace(cc.Token)
@@ -1019,18 +1025,18 @@ func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (au
 	// is the expected source (issue #421).
 	if token == "" {
 		log.Printf("[autosync] ERROR: cloud token is not configured (set ENGRAM_CLOUD_TOKEN or store token in cloud.json via `engram cloud config`); autosync disabled")
-		return nil, nil
+		return nil, nil, nil
 	}
 	// REQ-211: server URL required. Resolved from cloud.json or ENGRAM_CLOUD_SERVER.
 	if serverURL == "" {
 		log.Printf("[autosync] ERROR: cloud server URL is not configured (set ENGRAM_CLOUD_SERVER or run `engram cloud config --server <url>`); autosync disabled")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	remoteMT, err := remote.NewMutationTransport(serverURL, token)
 	if err != nil {
 		log.Printf("[autosync] ERROR: invalid server URL %q: %v; autosync disabled", serverURL, err)
-		return nil, nil
+		return nil, nil, nil
 	}
 	transport := &mutationTransportAdapter{remote: remoteMT}
 	mgrCfg := autosync.DefaultConfig()
@@ -1049,7 +1055,18 @@ func tryStartAutosync(ctx context.Context, s *store.Store, cfg store.Config) (au
 		go mgr.Run(ctx)
 	}
 	log.Printf("[autosync] started (server=%s)", serverURL)
-	return mgr, mgr.Stop
+	return mgr, mgr.Stop, remoteMT.SetToken
+}
+
+// validateMCPHTTPAuthConfig enforces that ENGRAM_MCP_HTTP_TOKEN (the local
+// static-token guard) and cloud mode (ENGRAM_CLOUD_AUTOSYNC=1) are never
+// both configured for the HTTP transport: they are two different meanings
+// for the same Authorization header slot (T2).
+func validateMCPHTTPAuthConfig(localToken string, cloudAutosyncRequested bool) error {
+	if strings.TrimSpace(localToken) != "" && cloudAutosyncRequested {
+		return fmt.Errorf("%s and ENGRAM_CLOUD_AUTOSYNC=1 cannot both be set: the HTTP transport's Authorization header is either a static local token or an Engram Cloud bearer, not both", mcp.EnvHTTPToken)
+	}
+	return nil
 }
 
 func cmdMCP(cfg store.Config) {
@@ -1113,6 +1130,12 @@ func cmdMCP(cfg store.Config) {
 	default:
 		fatal(fmt.Errorf("--transport must be %q or %q, got %q", "stdio", "http", transportFlag))
 	}
+	if transportFlag == "http" {
+		cloudModeRequested := strings.TrimSpace(os.Getenv("ENGRAM_CLOUD_AUTOSYNC")) == "1"
+		if err := validateMCPHTTPAuthConfig(os.Getenv(mcp.EnvHTTPToken), cloudModeRequested); err != nil {
+			fatal(err)
+		}
+	}
 
 	s, err := storeNew(cfg)
 	if err != nil {
@@ -1124,7 +1147,7 @@ func cmdMCP(cfg store.Config) {
 	// Autosync remains opt-in via ENGRAM_CLOUD_AUTOSYNC=1 and never makes MCP
 	// startup fatal when cloud config is missing or invalid.
 	ctx, cancel := context.WithCancel(context.Background())
-	_, mgrStop := tryStartAutosync(ctx, s, cfg)
+	_, mgrStop, setSyncToken := tryStartAutosync(ctx, s, cfg)
 	// stopAutosync is invoked concurrently: cmdMCP's deferred call runs on the
 	// main goroutine while the stdio EOF unwind hook may call it from the
 	// MCP reader goroutine. sync.Once provides the required synchronization.
@@ -1149,6 +1172,23 @@ func cmdMCP(cfg store.Config) {
 			LocalToken:     strings.TrimSpace(os.Getenv(mcp.EnvHTTPToken)),
 			AllowedOrigins: strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedOrigins)),
 			AllowedHosts:   strings.TrimSpace(os.Getenv(mcp.EnvHTTPAllowedHosts)),
+		}
+		// T2: cloud mode was requested (validateMCPHTTPAuthConfig above
+		// already rejected it alongside ENGRAM_MCP_HTTP_TOKEN). If autosync
+		// itself failed to start (setSyncToken == nil — bad/missing
+		// ENGRAM_CLOUD_SERVER or ENGRAM_CLOUD_TOKEN / cloud.json), fail
+		// startup instead of silently serving an unauthenticated endpoint.
+		if strings.TrimSpace(os.Getenv("ENGRAM_CLOUD_AUTOSYNC")) == "1" {
+			if setSyncToken == nil {
+				stopAutosync()
+				fatal(fmt.Errorf("ENGRAM_CLOUD_AUTOSYNC=1 is set but cloud sync could not start (missing or invalid ENGRAM_CLOUD_SERVER / ENGRAM_CLOUD_TOKEN or cloud.json) — fix the cloud configuration or unset ENGRAM_CLOUD_AUTOSYNC to run local-only"))
+			}
+			cc, ccErr := resolveCloudRuntimeConfig(cfg)
+			if ccErr != nil {
+				stopAutosync()
+				fatal(fmt.Errorf("cloud sync config error: %w", ccErr))
+			}
+			httpCfg.CloudAuth = newCloudBearerAuthenticator(cc.ServerURL, cc.Token, setSyncToken, s.EnrollProject)
 		}
 		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {
 			stopAutosync()
