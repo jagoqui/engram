@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -556,5 +557,64 @@ func TestWithCloudBearerGuard_ConfigErrorSurfacesClientMessageWith503(t *testing
 	}
 	if strings.Contains(string(body), "internal detail") {
 		t.Fatalf("body leaked the internal error text: %q", body)
+	}
+}
+
+func TestServeHTTP_OpenSSEStreamDoesNotMakeShutdownFail(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	s := newMCPTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeHTTP(ctx, NewServerWithConfig(s, MCPConfig{}, nil), HTTPTransportConfig{ListenAddr: addr})
+	}()
+
+	base := "http://" + addr
+	var initResp *http.Response
+	for i := 0; i < 50; i++ {
+		body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+		req, _ := http.NewRequest(http.MethodPost, base+"/mcp", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("X-Engram-Subproject", "demo")
+		if initResp, err = http.DefaultClient.Do(req); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	sessionID := initResp.Header.Get("Mcp-Session-Id")
+	_ = initResp.Body.Close()
+	if sessionID == "" {
+		t.Fatal("no Mcp-Session-Id from initialize")
+	}
+
+	getReq, _ := http.NewRequest(http.MethodGet, base+"/mcp", nil)
+	getReq.Header.Set("Accept", "text/event-stream")
+	getReq.Header.Set("Mcp-Session-Id", sessionID)
+	getReq.Header.Set("X-Engram-Subproject", "demo")
+	stream, err := (&http.Client{}).Do(getReq)
+	if err != nil {
+		t.Fatalf("open SSE stream: %v", err)
+	}
+	defer stream.Body.Close()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ServeHTTP returned %v after a signal with an open SSE stream; want a clean nil", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("ServeHTTP did not return")
 	}
 }

@@ -171,9 +171,16 @@ func ServeHTTP(ctx context.Context, mcpSrv *server.MCPServer, cfg HTTPTransportC
 	addr := ResolveHTTPListenAddr(cfg.ListenAddr)
 	warnIfUnauthenticatedListener(addr, cfg)
 
+	// Open streamable-HTTP GET (SSE) streams never end on their own, so
+	// Shutdown would wait for them until its deadline. Request contexts derive
+	// from baseCtx, which is canceled as shutdown starts, ending those streams.
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+
 	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: NewHTTPHandler(mcpSrv, cfg),
+		Addr:        addr,
+		Handler:     NewHTTPHandler(mcpSrv, cfg),
+		BaseContext: func(net.Listener) context.Context { return baseCtx },
 		// R4-no-server-timeouts: bound slow/stalled clients instead of
 		// leaving connections open indefinitely.
 		ReadHeaderTimeout: httpReadHeaderTimeout,
@@ -193,8 +200,14 @@ func ServeHTTP(ctx context.Context, mcpSrv *server.MCPServer, cfg HTTPTransportC
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		cancelBase()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			return err
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			// A signal-initiated stop is a clean exit even when a stubborn
+			// connection outlived the grace period: force-close the rest.
+			_ = httpSrv.Close()
 		}
 		return <-errCh
 	case err := <-errCh:
