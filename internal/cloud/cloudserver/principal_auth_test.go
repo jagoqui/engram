@@ -577,3 +577,18 @@ func TestLegacySyncPrincipalWildcardMutationPullKeepsNoFilterSemantics(t *testin
 		t.Fatalf("expected wildcard pull to return both projects, got %+v", resp.Mutations)
 	}
 }
+
+func TestHandleWhoAmIWithoutPrincipalIsNotImplemented(t *testing.T) {
+	// No authenticator (ENGRAM_CLOUD_INSECURE_NO_AUTH): withAuth lets the
+	// request through with no principal, so whoami must not answer 200 empty.
+	srv := New(&fakeStore{}, nil, 0)
+	req := httptest.NewRequest(http.MethodGet, "/auth/whoami", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d body=%q; want 501", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "authentication") {
+		t.Fatalf("body = %q; want a JSON error naming authentication", rec.Body.String())
+	}
+}

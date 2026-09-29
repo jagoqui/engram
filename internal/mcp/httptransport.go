@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"log"
 	"net"
@@ -96,7 +97,10 @@ type CloudBearerAuthenticator interface {
 	//   - (true, nil): allow the request through.
 	//   - (false, nil): reject with 401 (missing or invalid credentials).
 	//   - (false, err): reject with 503 (cloud unreachable) — err is safe to
-	//     log; implementations must never let it echo the raw token.
+	//     log; implementations must never let it echo the raw token. When err
+	//     (via errors.As) implements ClientMessage() string, that message is
+	//     returned in the 503 body instead of the generic one, for
+	//     operator-facing configuration errors.
 	Authenticate(ctx context.Context, token, project string) (bool, error)
 }
 
@@ -299,9 +303,15 @@ func withCloudBearerGuard(next http.Handler, auth CloudBearerAuthenticator) http
 
 		ok, err := auth.Authenticate(ctx, token, project)
 		if err != nil {
+			msg := "cloud sync is unavailable"
+			var ce interface{ ClientMessage() string }
+			if errors.As(err, &ce) {
+				msg = ce.ClientMessage()
+			}
+			body, _ := json.Marshal(map[string]string{"error": msg})
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"cloud sync is unavailable"}`))
+			_, _ = w.Write(body)
 			return
 		}
 		if !ok {

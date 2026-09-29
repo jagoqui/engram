@@ -2,6 +2,7 @@ package remote
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -17,8 +18,19 @@ import (
 // rejection).
 var ErrBearerInvalid = errors.New("cloud: bearer token rejected")
 
+// ErrIdentityBindingUnavailable is the shared class of "the cloud server is
+// reachable but cannot tell us which account a bearer belongs to", a
+// configuration problem (not an outage). ErrWhoAmIUnsupported and
+// ErrWhoAmIAuthDisabled both match it via errors.Is.
+var ErrIdentityBindingUnavailable = errors.New("cloud cannot bind a bearer token to an account")
+
 // ErrWhoAmIUnsupported means the cloud server predates /auth/whoami (404).
-var ErrWhoAmIUnsupported = errors.New("cloud server does not support /auth/whoami; upgrade Engram Cloud")
+var ErrWhoAmIUnsupported = fmt.Errorf("%w: cloud server does not support /auth/whoami; upgrade Engram Cloud", ErrIdentityBindingUnavailable)
+
+// ErrWhoAmIAuthDisabled means the cloud server answered /auth/whoami with 501:
+// its authentication is disabled (ENGRAM_CLOUD_INSECURE_NO_AUTH), so there is
+// no principal to bind a bearer to.
+var ErrWhoAmIAuthDisabled = fmt.Errorf("%w: cloud server has authentication disabled (ENGRAM_CLOUD_INSECURE_NO_AUTH); enable cloud auth", ErrIdentityBindingUnavailable)
 
 // validateBearerRoundTripper is the http.RoundTripper ValidateBearer's
 // throwaway transport uses. Production always uses http.DefaultTransport
@@ -52,6 +64,8 @@ func ValidateBearer(baseURL, token string) (string, error) {
 		return "", ErrBearerInvalid
 	case http.StatusNotFound:
 		return "", ErrWhoAmIUnsupported
+	case http.StatusNotImplemented:
+		return "", ErrWhoAmIAuthDisabled
 	default:
 		return "", newHTTPStatusError("whoami", resp.StatusCode, nil)
 	}

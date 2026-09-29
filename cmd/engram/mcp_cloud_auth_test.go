@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Gentleman-Programming/engram/v2/internal/cloud/remote"
 )
@@ -158,5 +159,55 @@ func TestCloudBearerAuthenticator_CacheHitWithoutPrincipalRevalidates(t *testing
 	a.cache.store(bearerCacheKey("bearer-token"), true, bearerCachePositiveTTL)
 	if ok, err := a.Authenticate(context.Background(), "bearer-token", "demo"); err != nil || !ok {
 		t.Fatalf("Authenticate = (%v, %v); want (true, nil)", ok, err)
+	}
+}
+
+func TestCloudBearerAuthenticator_IdentityBindingUnavailableIsCachedAndLoggedOnce(t *testing.T) {
+	for name, bindErr := range map[string]error{
+		"old cloud":     remote.ErrWhoAmIUnsupported,
+		"auth disabled": remote.ErrWhoAmIAuthDisabled,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			oldOut := log.Writer()
+			log.SetOutput(&buf)
+			defer log.SetOutput(oldOut)
+
+			calls := 0
+			a := newCloudBearerAuthenticator("https://cloud.example.test", "", nil, nil)
+			a.validate = func(_, _ string) (string, error) { calls++; return "", bindErr }
+
+			for i := 0; i < 3; i++ {
+				ok, err := a.Authenticate(context.Background(), "tok", "demo")
+				if ok || !errors.Is(err, remote.ErrIdentityBindingUnavailable) {
+					t.Fatalf("Authenticate = (%v, %v); want (false, identity-binding error)", ok, err)
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("validate called %d times; want 1 (outcome cached for a TTL)", calls)
+			}
+			logs := buf.String()
+			if strings.Contains(logs, "could not reach") {
+				t.Fatalf("logs = %q; must not claim the cloud was unreachable", logs)
+			}
+			if n := strings.Count(logs, "https://cloud.example.test"); n != 1 {
+				t.Fatalf("logs mention the cloud URL %d times; want exactly one precise message per TTL: %q", n, logs)
+			}
+		})
+	}
+}
+
+func TestCloudBearerAuthenticator_IdentityBindingErrorExpires(t *testing.T) {
+	calls := 0
+	now := time.Unix(1000, 0)
+	a := newCloudBearerAuthenticator("https://cloud.example.test", "", nil, nil)
+	a.now = func() time.Time { return now }
+	a.validate = func(_, _ string) (string, error) { calls++; return "", remote.ErrWhoAmIUnsupported }
+
+	_, _ = a.Authenticate(context.Background(), "tok", "demo")
+	now = now.Add(identityBindingErrorTTL + time.Second)
+	_, _ = a.Authenticate(context.Background(), "tok", "demo")
+	if calls != 2 {
+		t.Fatalf("validate called %d times; want 2 (cached error expires after its TTL)", calls)
 	}
 }

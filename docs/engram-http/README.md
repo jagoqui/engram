@@ -83,6 +83,7 @@ Either way, every request's bearer is validated against the cloud server's `GET 
 
 - Invalid or wrong-account bearer → `401`
 - Cloud unreachable, or a cloud server too old to support `/auth/whoami` → `503`
+- Cloud server started with `ENGRAM_CLOUD_INSECURE_NO_AUTH=1` (its `/auth/whoami` answers `501`; bearer binding is impossible without cloud auth) → `503` with an explicit message; the condition is cached for a minute and logged once per minute
 
 A validated request bearer also becomes the token autosync uses for outbound sync calls for the rest of the process lifetime ("last validated token wins"), and its project is enrolled for cloud sync automatically. `ENGRAM_CLOUD_SERVER` is always required in cloud mode — a missing or invalid server URL is a fatal startup error either way.
 

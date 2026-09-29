@@ -96,3 +96,19 @@ func TestValidateBearer_UnreachableServerIsNotErrBearerInvalid(t *testing.T) {
 		t.Fatalf("ValidateBearer error = %v; want a non-nil error distinct from ErrBearerInvalid", err)
 	}
 }
+
+func TestValidateBearer_NotImplementedReturnsErrWhoAmIAuthDisabled(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"auth disabled"}`, http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+	swapValidateBearerTransport(t, srv.Client().Transport)
+
+	_, err := ValidateBearer(srv.URL, "some-token")
+	if !errors.Is(err, ErrWhoAmIAuthDisabled) || !errors.Is(err, ErrIdentityBindingUnavailable) {
+		t.Fatalf("ValidateBearer error = %v; want ErrWhoAmIAuthDisabled (an ErrIdentityBindingUnavailable)", err)
+	}
+	if !errors.Is(ErrWhoAmIUnsupported, ErrIdentityBindingUnavailable) {
+		t.Fatalf("ErrWhoAmIUnsupported must also be an ErrIdentityBindingUnavailable")
+	}
+}

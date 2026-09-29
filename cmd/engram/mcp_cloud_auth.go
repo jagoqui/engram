@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Gentleman-Programming/engram/v2/internal/cloud/remote"
 	"github.com/Gentleman-Programming/engram/v2/internal/mcp"
@@ -29,8 +30,13 @@ type cloudBearerAuthenticator struct {
 	setSyncToken  func(token string)
 	enrollProject func(project string) error
 
-	mu       sync.Mutex
-	enrolled map[string]struct{} // projects already ensured enrolled this process
+	now func() time.Time // injectable clock
+
+	mu sync.Mutex
+	// bindErr caches an ErrIdentityBindingUnavailable outcome until bindErrUntil.
+	bindErr      error
+	bindErrUntil time.Time
+	enrolled     map[string]struct{} // projects already ensured enrolled this process
 	// principals caches sha256(token)->principal ID; "" key = pinned owner.
 	principals map[string]string
 }
@@ -49,7 +55,24 @@ func newCloudBearerAuthenticator(serverURL, fallbackToken string, setSyncToken f
 		enrollProject: enrollProject,
 		enrolled:      make(map[string]struct{}),
 		principals:    make(map[string]string),
+		now:           time.Now,
 	}
+}
+
+// identityBindingErrorTTL is how long a "cloud cannot bind identity"
+// configuration error is cached (and logged once) before cloud is re-checked.
+const identityBindingErrorTTL = time.Minute
+
+// identityBindingError is the operator-facing configuration error returned
+// (and cached) when the cloud server cannot bind a bearer to an account.
+type identityBindingError struct{ cause error }
+
+func (e *identityBindingError) Error() string { return e.cause.Error() }
+func (e *identityBindingError) Unwrap() error { return e.cause }
+
+// ClientMessage is the 503 body text (see mcp.withCloudBearerGuard).
+func (e *identityBindingError) ClientMessage() string {
+	return "Engram Cloud cannot bind bearer tokens to an account (auth disabled or /auth/whoami unsupported); see the engram-http logs"
 }
 
 var _ mcp.CloudBearerAuthenticator = (*cloudBearerAuthenticator)(nil)
@@ -69,7 +92,9 @@ func (a *cloudBearerAuthenticator) Authenticate(_ context.Context, token, projec
 		authorized, err = a.authorizeOwner(principalID)
 	}
 	if err != nil {
-		log.Printf("[mcp-http] WARNING: cloud bearer validation could not reach %s: %v", a.serverURL, err)
+		if !errors.Is(err, remote.ErrIdentityBindingUnavailable) {
+			log.Printf("[mcp-http] WARNING: cloud bearer validation could not reach %s: %v", a.serverURL, err)
+		}
 		return false, err
 	}
 	if !authorized {
@@ -85,6 +110,25 @@ func (a *cloudBearerAuthenticator) Authenticate(_ context.Context, token, projec
 
 // resolvePrincipal returns token's cloud principal ID via the cache, or "".
 func (a *cloudBearerAuthenticator) resolvePrincipal(token string) (string, error) {
+	a.mu.Lock()
+	if a.bindErr != nil && a.now().Before(a.bindErrUntil) {
+		err := a.bindErr
+		a.mu.Unlock()
+		return "", err
+	}
+	a.mu.Unlock()
+	id, err := a.resolvePrincipalUncached(token)
+	if errors.Is(err, remote.ErrIdentityBindingUnavailable) {
+		err = &identityBindingError{cause: err}
+		a.mu.Lock()
+		a.bindErr, a.bindErrUntil = err, a.now().Add(identityBindingErrorTTL)
+		a.mu.Unlock()
+		log.Printf("[mcp-http] ERROR: Engram Cloud at %s cannot bind bearer tokens to an account: %v; refusing every /mcp request (503) until this is fixed", a.serverURL, errors.Unwrap(err))
+	}
+	return id, err
+}
+
+func (a *cloudBearerAuthenticator) resolvePrincipalUncached(token string) (string, error) {
 	key := bearerCacheKey(token)
 	// record stores the principal before CheckOrValidate caches the positive
 	// result, so a concurrent cache hit never sees a valid token without it.

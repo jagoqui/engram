@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -528,5 +530,31 @@ func TestHTTPTransport_SaveWithoutProjectSignalErrorsAndPersistsNothing(t *testi
 	}
 	if count, err := s.CountObservationsForProject(""); err != nil || count != 0 {
 		t.Fatalf("expected no observation persisted under an empty project, got count=%d err=%v", count, err)
+	}
+}
+
+type configErr struct{}
+
+func (configErr) Error() string         { return "internal detail" }
+func (configErr) ClientMessage() string { return "cloud cannot bind bearer tokens to an account" }
+
+func TestWithCloudBearerGuard_ConfigErrorSurfacesClientMessageWith503(t *testing.T) {
+	auth := &fakeCloudAuth{err: fmt.Errorf("wrapped: %w", configErr{})}
+	srv := httptest.NewServer(withCloudBearerGuard(okHandler(), auth))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "cannot bind bearer tokens") {
+		t.Fatalf("got (%d, %q); want 503 carrying the config error's client message", resp.StatusCode, body)
+	}
+	if strings.Contains(string(body), "internal detail") {
+		t.Fatalf("body leaked the internal error text: %q", body)
 	}
 }

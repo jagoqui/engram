@@ -574,8 +574,18 @@ func (s *CloudServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleWhoAmI reports the authenticated principal's ID (plain text), used to bind an HTTP MCP bearer to one cloud account (cmd/engram's cloudBearerAuthenticator).
+// withAuth does NOT guarantee a principal: with authentication disabled
+// (ENGRAM_CLOUD_INSECURE_NO_AUTH) or an authenticator that does not resolve
+// principals, requests pass through anonymously. Answering 200 with an empty
+// body would look like a valid identity, so it replies 501 Not Implemented
+// (distinct from 404, which means an old server without this route).
 func (s *CloudServer) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
-	principal, _ := PrincipalFromContext(r.Context()) // withAuth guarantees a principal
+	principal, ok := PrincipalFromContext(r.Context())
+	if !ok || principal.ID == "" {
+		writeActionableError(w, http.StatusNotImplemented, constants.UpgradeErrorClassBlocked, "whoami_auth_disabled",
+			"authentication is disabled on this cloud server, so /auth/whoami cannot identify the caller")
+		return
+	}
 	_, _ = w.Write([]byte(principal.ID))
 }
 
