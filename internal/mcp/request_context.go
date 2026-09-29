@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	projectpkg "github.com/Gentleman-Programming/engram/v2/internal/project"
 )
 
 // requestContextKey namespaces context values this package attaches to a
@@ -15,6 +17,7 @@ const (
 	ctxKeyRequestProject requestContextKey = iota
 	ctxKeyHTTPTransport
 	ctxKeyBearerToken
+	ctxKeyWriteProjectHook
 )
 
 // ErrHTTPProjectRequired is returned when an MCP tool call arrives over the
@@ -81,4 +84,28 @@ func RequestBearerToken(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// withWriteProjectHook attaches the HTTP transport's OnWriteProject callback
+// to ctx. Nil hooks are not stored.
+func withWriteProjectHook(ctx context.Context, hook func(project string)) context.Context {
+	if hook == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyWriteProjectHook, hook)
+}
+
+// notifyWriteProject reports a successfully resolved write project to the
+// HTTP transport's hook (used for cloud sync enrollment) and passes the
+// resolution result through unchanged. It is a no-op outside HTTP mode.
+func notifyWriteProject(ctx context.Context, res projectpkg.DetectionResult, err error) (projectpkg.DetectionResult, error) {
+	if err != nil || !isHTTPTransport(ctx) {
+		return res, err
+	}
+	if hook, _ := ctx.Value(ctxKeyWriteProjectHook).(func(string)); hook != nil {
+		if p := strings.TrimSpace(res.Project); p != "" {
+			hook(p)
+		}
+	}
+	return res, err
 }

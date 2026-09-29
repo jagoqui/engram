@@ -1172,8 +1172,17 @@ func handleListProjects(s *store.Store) server.ToolHandlerFunc {
 // detection info is available (REQ-313).
 func handleCurrentProject(s *store.Store, cfg MCPConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		cwd, _ := os.Getwd()
-		res := projectpkg.DetectProjectFull(cwd)
+		var cwd string
+		var res projectpkg.DetectionResult
+		if isHTTPTransport(ctx) {
+			// The server's cwd belongs to the container, not the remote
+			// client: never detect from it or expose it. Resolve from the
+			// request header, then the server default, else say what is needed.
+			res = projectpkg.DetectionResult{Error: ErrHTTPProjectRequired}
+		} else {
+			cwd, _ = os.Getwd()
+			res = projectpkg.DetectProjectFull(cwd)
+		}
 		if processRes, ok, err := processProjectResult(ctx, cfg.DefaultProject); ok {
 			if err != nil {
 				res = projectpkg.DetectionResult{Source: projectpkg.SourceProcessOverride, Error: err}
@@ -2819,7 +2828,8 @@ func processProjectResult(ctx context.Context, defaultProject string) (projectpk
 }
 
 func resolveWriteProjectWithProcessOverride(ctx context.Context, s *store.Store, defaultProject string, requireKnownProcess bool) (projectpkg.DetectionResult, error) {
-	return resolveMCPProjectWithPolicy(ctx, s, "", defaultProject, requireKnownProcess)
+	res, err := resolveMCPProjectWithPolicy(ctx, s, "", defaultProject, requireKnownProcess)
+	return notifyWriteProject(ctx, res, err)
 }
 
 type ambiguousRecoveryTokenValidator func(projectpkg.DetectionResult, string) (provided bool, valid bool)
@@ -2828,7 +2838,8 @@ func resolveWriteProjectWithChoiceAndProcessOverride(ctx context.Context, s *sto
 	if strings.TrimSpace(projectChoice) == "" {
 		return resolveWriteProjectWithProcessOverride(ctx, s, defaultProject, false)
 	}
-	return resolveWriteProjectWithChoice(ctx, s, projectChoice, reason, validateToken)
+	res, err := resolveWriteProjectWithChoice(ctx, s, projectChoice, reason, validateToken)
+	return notifyWriteProject(ctx, res, err)
 }
 
 // resolveWriteProjectWithChoice preserves normal write resolution authority and
@@ -2899,10 +2910,12 @@ func resolveSaveWriteProjectWithProcessOverride(ctx context.Context, s *store.St
 			if err != nil {
 				return projectpkg.DetectionResult{}, err
 			}
-			return resolveMCPProjectWithPolicy(ctx, s, "", defaultProject, false)
+			res, err := resolveMCPProjectWithPolicy(ctx, s, "", defaultProject, false)
+			return notifyWriteProject(ctx, res, err)
 		}
 	}
-	return resolveSaveWriteProject(ctx, s, projectChoice, explicitProjectProvided, reason, sessionID, validateToken)
+	res, err := resolveSaveWriteProject(ctx, s, projectChoice, explicitProjectProvided, reason, sessionID, validateToken)
+	return notifyWriteProject(ctx, res, err)
 }
 
 // resolveSaveWriteProject resolves the write project target using the full MCP precedence:
@@ -2986,6 +2999,18 @@ func resolveSaveWriteProject(ctx context.Context, s *store.Store, projectChoice 
 				Source:  projectpkg.SourceExplicitOverride,
 				Path:    sessionPath,
 			}, nil
+		}
+
+		// HTTP mode has no cwd/config signal to vouch for a new project, so an
+		// explicit project equal to the request's header project is
+		// authoritative: the client named it on this very request.
+		if isHTTPTransport(ctx) {
+			if headerProject, ok := requestProjectFromContext(ctx); ok && headerProject == project {
+				return projectpkg.DetectionResult{
+					Project: project,
+					Source:  projectpkg.SourceExplicitOverride,
+				}, nil
+			}
 		}
 
 		if cwdErr != nil {

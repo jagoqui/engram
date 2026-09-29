@@ -1311,7 +1311,11 @@ func cmdMCP(cfg store.Config) {
 				lazyCloud = &lazyAutosyncStarter{}
 				setSyncToken = lazyCloud.hook(ctx, s, serverURL)
 			}
-			httpCfg.CloudAuth = newCloudBearerAuthenticator(serverURL, cc.Token, setSyncToken, s.EnrollProject)
+			cloudAuth := newCloudBearerAuthenticator(serverURL, cc.Token, setSyncToken, s.EnrollProject)
+			httpCfg.CloudAuth = cloudAuth
+			// Enroll the project each write actually resolved to (tool arg,
+			// session, server default), not only the header project.
+			httpCfg.OnWriteProject = cloudAuth.ensureEnrolled
 			httpCfg.CloudBearerlessFallback = strings.TrimSpace(cc.Token) != ""
 		}
 		if err := serveMCPHTTP(ctx, mcpSrv, httpCfg); err != nil {

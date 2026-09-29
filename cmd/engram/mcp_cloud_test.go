@@ -606,3 +606,38 @@ func TestTryStartAutosync_MissingTokenStaysErrorOutsideHTTPBearerOnly(t *testing
 		t.Fatalf("expected the REQ-211 ERROR outside HTTP bearer-only mode, got %q", logBuf.String())
 	}
 }
+
+// TestCmdMCPHTTP_CloudModeWiresWriteProjectEnrollment: writes whose project
+// comes from a tool argument/session/default (not only the header) must be
+// enrolled through the authenticator's cached, idempotent path.
+func TestCmdMCPHTTP_CloudModeWiresWriteProjectEnrollment(t *testing.T) {
+	cfg := testConfig(t)
+	stubRuntimeHooks(t)
+	stubExitWithPanic(t)
+	gotCfg, _ := setupLazyCloudTestServer(t)
+
+	t.Setenv("ENGRAM_CLOUD_AUTOSYNC", "1")
+	t.Setenv(mcp.EnvHTTPToken, "")
+	t.Setenv("ENGRAM_CLOUD_SERVER", "https://cloud.example.test")
+	t.Setenv("ENGRAM_CLOUD_TOKEN", "")
+
+	withArgs(t, "engram", "mcp", "--transport=http")
+	_, stderr, recovered := captureOutputAndRecover(t, func() { cmdMCP(cfg) })
+	if recovered != nil || stderr != "" {
+		t.Fatalf("expected clean run, got panic=%v stderr=%q", recovered, stderr)
+	}
+	authImpl, ok := gotCfg.CloudAuth.(*cloudBearerAuthenticator)
+	if !ok {
+		t.Fatalf("expected CloudAuth to be a *cloudBearerAuthenticator, got %T", gotCfg.CloudAuth)
+	}
+	if gotCfg.OnWriteProject == nil {
+		t.Fatal("expected HTTPTransportConfig.OnWriteProject to be wired in cloud mode")
+	}
+	var enrolled []string
+	authImpl.enrollProject = func(p string) error { enrolled = append(enrolled, p); return nil }
+	gotCfg.OnWriteProject("arg-proj")
+	gotCfg.OnWriteProject("arg-proj")
+	if len(enrolled) != 1 || enrolled[0] != "arg-proj" {
+		t.Fatalf("enrolled = %v; want exactly one enrollment of arg-proj", enrolled)
+	}
+}

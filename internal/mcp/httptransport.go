@@ -82,6 +82,12 @@ type HTTPTransportConfig struct {
 	// no bearer by using the configured ENGRAM_CLOUD_TOKEN, so the endpoint
 	// accepts unauthenticated clients.
 	CloudBearerlessFallback bool
+
+	// OnWriteProject, when non-nil, is called with the project each write
+	// tool call actually resolved to (header, project argument, session or
+	// server default), so the caller can enroll it for cloud sync. It must
+	// be idempotent and cheap: it runs on every resolved write.
+	OnWriteProject func(project string)
 }
 
 // CloudBearerAuthenticator lets the streamable HTTP transport delegate all
@@ -124,7 +130,9 @@ func ResolveHTTPListenAddr(flagValue string) string {
 func NewHTTPHandler(mcpSrv *server.MCPServer, cfg HTTPTransportConfig) http.Handler {
 	streamable := server.NewStreamableHTTPServer(mcpSrv,
 		server.WithEndpointPath(httpMCPEndpointPath),
-		server.WithHTTPContextFunc(httpRequestContextFunc),
+		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			return withWriteProjectHook(httpRequestContextFunc(ctx, r), cfg.OnWriteProject)
+		}),
 	)
 
 	mux := http.NewServeMux()
